@@ -1,12 +1,10 @@
-import os
+import streamlit as st
 from openai import OpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# Debes usar la misma estructura que en tu otro agente
+# Ya no necesitamos dotenv ni os, porque st.secrets maneja todo de forma segura
+# CLIENTE configurado con st.secrets
 client = OpenAI(
-    api_key=os.getenv("AI_API_KEY"), 
+    api_key=st.secrets["GROQ_API_KEY"], 
     base_url="https://api.groq.com/openai/v1"
 )
 
