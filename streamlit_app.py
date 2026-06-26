@@ -15,7 +15,6 @@ clave_supabase = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(url_supabase, clave_supabase)
 
 # Inicialización segura del cliente Google GenAI
-# Busca automáticamente la variable GEMINI_API_KEY en el entorno o en st.secrets
 try:
     client_ai = genai.Client()
 except Exception:
@@ -25,13 +24,11 @@ st.set_page_config(page_title="Agencia ViveroOnline", layout="wide", page_icon="
 st.title("🌱 Centro de Comando - ViveroOnline")
 
 # 2. Inicializar memoria de estados (Session State)
-# Estados para la pestaña de Textos
 if "contenido_actual" not in st.session_state:
     st.session_state.contenido_actual = None
 if "tabla_destino" not in st.session_state:
     st.session_state.tabla_destino = None
 
-# Estados para la pestaña de Video (Evita que el video desaparezca al redibujar la UI)
 if "video_url_actual" not in st.session_state:
     st.session_state.video_url_actual = None
 if "prompt_video_procesado" not in st.session_state:
@@ -41,7 +38,7 @@ if "prompt_video_procesado" not in st.session_state:
 tab_texto, tab_video = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video (Veo 3)"])
 
 # ==========================================
-# PESTAÑA 1: GENERACIÓN DE TEXTO (Tu lógica original intacta)
+# PESTAÑA 1: GENERACIÓN DE TEXTO (Lógica original)
 # ==========================================
 with tab_texto:
     st.subheader("Creador de Contenido Escrito")
@@ -61,7 +58,6 @@ with tab_texto:
         else:
             st.warning("Por favor, ingresa un tema.")
 
-    # Zona de revisión y guardado inteligente para Texto
     if st.session_state.contenido_actual:
         st.success(f"¡{tipo_formato} generado con éxito!")
         st.markdown(st.session_state.contenido_actual)
@@ -79,7 +75,7 @@ with tab_texto:
                     st.session_state.contenido_actual = None
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error al guardar text: {e}")
+                    st.error(f"Error al guardar texto: {e}")
                     
         with col_b:
             if st.button("❌ Rechazar Texto", key="btn_rechazar_texto"):
@@ -96,7 +92,7 @@ with tab_video:
     if not client_ai:
         st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada o el SDK no se pudo inicializar.")
     
-    # 1. El "Cerebro" de las Plantillas (Cero costo de tokens)
+    # 1. El "Cerebro" de las Plantillas
     PLANTILLAS_ESTRATEGICAS = {
         "🌱 Conseguir nuevos viveristas": {
             "estilo": "Estilo documental agrícola (Cámara en mano, luz de mañana)",
@@ -120,7 +116,6 @@ with tab_video:
         }
     }
 
-    # 2. Interfaz de Selección Rápida
     objetivo_seleccionado = st.selectbox(
         "🎯 ¿Cuál es el objetivo comercial de este clip?", 
         list(PLANTILLAS_ESTRATEGICAS.keys())
@@ -128,7 +123,6 @@ with tab_video:
     
     st.markdown("---")
     
-    # Cargar los parámetros óptimos según la elección
     config_actual = PLANTILLAS_ESTRATEGICAS[objetivo_seleccionado]
     
     c1, c2 = st.columns(2)
@@ -139,10 +133,8 @@ with tab_video:
         
     detalles_entorno = st.text_area("🌅 Detalles del entorno (Auto-configurado):", value=config_actual["entorno"])
 
-    # 3. Motor de Generación
     if st.button("Generar B-Roll con Veo 3", type="primary", key="btn_generar_video_v2"):
         if especie_planta:
-            # Ensamblaje del prompt técnico perfecto sin que el usuario sufra
             prompt_final_veo = (
                 f"Video promocional hiperrealista 4K. {estilo_visual}. "
                 f"Sujeto principal: {especie_planta}. "
@@ -157,7 +149,7 @@ with tab_video:
                     operation = client_ai.models.generate_videos(
                         model="veo-3.1-generate-preview",
                         prompt=prompt_final_veo,
-                        config={"aspect_ratio": "9:16"} # Listo para Reels, TikTok y WhatsApp
+                        config={"aspect_ratio": "9:16"}
                     )
                     
                     if hasattr(operation, 'generated_videos') and operation.generated_videos:
@@ -166,14 +158,24 @@ with tab_video:
                         st.session_state.video_url_actual = operation.output
                         
                 except Exception as e:
-                    st.error(f"Fallo en la API de Google: {e}")
+                    error_str = str(e)
+                    # Manejo específico del error de cuota agotada
+                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        st.warning("⏳ Has alcanzado el límite de generaciones gratuitas de la API de Google por el momento. Por favor, espera unos minutos o revisa tu cuota diaria en Google AI Studio.")
+                    else:
+                        st.error(f"Fallo en la API de Google: {e}")
         else:
             st.warning("⚠️ Ingresa una especie o protagonista para disparar la generación.")
 
-    # 4. Renderizado Final
     if st.session_state.video_url_actual:
         st.success("¡B-Roll renderizado con éxito! Descárgalo y únelo a tus textos en WhatsApp o Instagram.")
         with st.expander("Ver configuración técnica del Prompt (Modo Dios)"):
             st.code(st.session_state.prompt_video_procesado)
         
         st.video(st.session_state.video_url_actual)
+        
+        # Botón para limpiar y generar otro
+        if st.button("🗑️ Limpiar y generar un nuevo clip", key="btn_limpiar_clip"):
+            st.session_state.video_url_actual = None
+            st.session_state.prompt_video_procesado = None
+            st.rerun()
