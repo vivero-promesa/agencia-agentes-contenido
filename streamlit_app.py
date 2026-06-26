@@ -87,96 +87,93 @@ with tab_texto:
                 st.rerun()
 
 # ==========================================
-# PESTAÑA 2: GENERACIÓN DE VIDEO (Integración Veo 3)
+# PESTAÑA 2: GENERACIÓN DE VIDEO (Plantillas Inteligentes)
 # ==========================================
 with tab_video:
-    st.subheader("Generación de Clips con Google Veo 3")
-    st.write("Construye videos cinemáticos de alta fidelidad optimizados para el catálogo digital o estados de WhatsApp.")
+    st.subheader("Generación Estratégica de B-Roll (Google Veo 3)")
+    st.write("Selecciona tu objetivo comercial. El sistema configurará automáticamente la dirección de fotografía para maximizar la conversión.")
 
     if not client_ai:
-        st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada o el SDK no se pudo inicializar. Verifica tus credenciales.")
+        st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada o el SDK no se pudo inicializar.")
     
-    # Parámetros estructurados para mitigar prompts débiles y proteger créditos
+    # 1. El "Cerebro" de las Plantillas (Cero costo de tokens)
+    PLANTILLAS_ESTRATEGICAS = {
+        "🌱 Conseguir nuevos viveristas": {
+            "estilo": "Estilo documental agrícola (Cámara en mano, luz de mañana)",
+            "entorno": "Vivero moderno y organizado en la Sabana de Bogotá, sensación de abundancia y negocio próspero, agricultor revisando plantas de forma profesional."
+        },
+        "🛒 Vender una planta específica": {
+            "estilo": "Primer plano extremo (Detalle de textura de hojas y follaje)",
+            "entorno": "Gotas de rocío sobre los pétalos, fondo muy desenfocado (efecto bokeh) para resaltar el producto, iluminación de estudio natural."
+        },
+        "🏡 Promocionar el Vivero (Institucional)": {
+            "estilo": "Toma aérea comercial (Paneo lento sobre camas de cultivo)",
+            "entorno": "Invernaderos limpios y extensos, luz de atardecer dorada, simetría en la organización de las macetas, ambiente de confianza B2B."
+        },
+        "📦 Lanzamiento de inventario": {
+            "estilo": "Cinematográfico (Movimiento dinámico rápido, colores vivos)",
+            "entorno": "Múltiples especies agrupadas, colores altamente saturados y vibrantes, sensación de abundancia y novedad, luz brillante."
+        },
+        "🎄 Campañas estacionales (Día de la Madre/Navidad)": {
+            "estilo": "Cinematográfico (Iluminación cálida y emocional)",
+            "entorno": "Plantas decorativas de temporada, atmósfera festiva y acogedora, colores de contraste suaves, ideal para regalo."
+        }
+    }
+
+    # 2. Interfaz de Selección Rápida
+    objetivo_seleccionado = st.selectbox(
+        "🎯 ¿Cuál es el objetivo comercial de este clip?", 
+        list(PLANTILLAS_ESTRATEGICAS.keys())
+    )
+    
+    st.markdown("---")
+    
+    # Cargar los parámetros óptimos según la elección
+    config_actual = PLANTILLAS_ESTRATEGICAS[objetivo_seleccionado]
+    
     c1, c2 = st.columns(2)
     with c1:
-        especie_planta = st.text_input("Especie o producto objetivo:", placeholder="Ej. Sansevieria Trifasciata, Anturio Negro")
+        especie_planta = st.text_input("🌿 Especie o elemento protagonista:", placeholder="Ej. Orquídeas, Invernadero general, Anturios")
     with c2:
-        estilo_visual = st.selectbox(
-            "Enfoque y estilo óptico:",
-            [
-                "Cinematográfico (Macro, iluminación natural tenue)", 
-                "Primer plano extremo (Detalle de textura de hojas y follaje)", 
-                "Toma aérea comercial (Paneo lento sobre camas de cultivo)", 
-                "Estilo documental agrícola (Cámara en mano, luz de mañana)"
-            ]
-        )
+        estilo_visual = st.text_input("🎥 Dirección de cámara (Auto-configurado):", value=config_actual["estilo"])
         
-    detalles_entorno = st.text_area(
-        "Detalles específicos del entorno y atmósfera:",
-        placeholder="Ej. Gotas de rocío sobre los pétalos, fondo desenfocado (bokeh), invernadero tradicional de la Sabana de Bogotá al atardecer."
-    )
+    detalles_entorno = st.text_area("🌅 Detalles del entorno (Auto-configurado):", value=config_actual["entorno"])
 
-    if st.button("Generar Clip con Veo 3", type="primary", key="btn_generar_video"):
+    # 3. Motor de Generación
+    if st.button("Generar B-Roll con Veo 3", type="primary", key="btn_generar_video_v2"):
         if especie_planta:
-            # Ingeniería de prompt controlada en backend
+            # Ensamblaje del prompt técnico perfecto sin que el usuario sufra
             prompt_final_veo = (
-                f"Video promocional de alta resolución. {estilo_visual}. "
-                f"Enfoque principal en la planta: {especie_planta}. "
-                f"Detalles de la escena: {detalles_entorno}. "
-                f"Fotorrealista, texturas orgánicas nítidas, colores vivos saturados naturales, 4k."
+                f"Video promocional hiperrealista 4K. {estilo_visual}. "
+                f"Sujeto principal: {especie_planta}. "
+                f"Contexto y atmósfera: {detalles_entorno}. "
+                f"Calidad cinematográfica, sin textos, texturas orgánicas nítidas."
             )
             
             st.session_state.prompt_video_procesado = prompt_final_veo
             
-            with st.spinner("Orquestando generación en Google Veo 3... (Este proceso toma entre 1 y 2 minutos) 🎬"):
+            with st.spinner("Renderizando clip cinemático... (Toma ~1 minuto) 🎬"):
                 try:
-                    # Llamada a la API oficial de Google GenAI para generación de video
                     operation = client_ai.models.generate_videos(
                         model="veo-3.1-generate-preview",
                         prompt=prompt_final_veo,
-                        config={"aspect_ratio": "9:16"} # Forzado nativo para Reels/WhatsApp
+                        config={"aspect_ratio": "9:16"} # Listo para Reels, TikTok y WhatsApp
                     )
                     
-                    # Extraer el recurso generado desde los metadatos de la operación completada
-                    # Nota: Dependiendo de la estructura exacta del payload del preview, ajustamos el binding
                     if hasattr(operation, 'generated_videos') and operation.generated_videos:
                         st.session_state.video_url_actual = operation.generated_videos[0].video.uri
                     else:
                         st.session_state.video_url_actual = operation.output
                         
                 except Exception as e:
-                    st.error(f"Fallo en el servicio de Vertex AI / AI Studio: {e}")
+                    st.error(f"Fallo en la API de Google: {e}")
         else:
-            st.warning("Debes especificar la especie o planta objetivo para estructurar el prompt.")
+            st.warning("⚠️ Ingresa una especie o protagonista para disparar la generación.")
 
-    # Renderizado y Persistencia del Video Generado
+    # 4. Renderizado Final
     if st.session_state.video_url_actual:
-        st.success("¡Video renderizado por Veo 3 con éxito!")
+        st.success("¡B-Roll renderizado con éxito! Descárgalo y únelo a tus textos en WhatsApp o Instagram.")
+        with st.expander("Ver configuración técnica del Prompt (Modo Dios)"):
+            st.code(st.session_state.prompt_video_procesado)
         
-        # Mostrar el prompt exacto utilizado bajo auditoría técnica
-        st.info(f"**Prompt técnico ejecutado:** *{st.session_state.prompt_video_procesado}*")
-        
-        # Reproductor nativo de Streamlit
         st.video(st.session_state.video_url_actual)
-        
-        st.markdown("### Acciones de Operación Multimedia")
-        col_v1, col_v2 = st.columns(2)
-        
-        with col_v1:
-            if st.button("💾 Guardar Metadata en Supabase", key="btn_guardar_video"):
-                try:
-                    # Estructura opcional por si deseas persistir la URL generada en tu base de datos
-                    datos_video = {
-                        "tema": especie_planta,
-                        "contenido": f"Prompt: {st.session_state.prompt_video_procesado} | URL: {st.session_state.video_url_actual}"
-                    }
-                    supabase.table("guiones").insert(datos_video).execute()
-                    st.success("Referencia de video guardada exitosamente en la tabla 'guiones'.")
-                except Exception as err:
-                    st.error(f"No se pudo indexar el video en Supabase: {err}")
-                    
-        with col_v2:
-            if st.button("🗑️ Limpiar Espacio de Trabajo", key="btn_limpiar_video"):
-                st.session_state.video_url_actual = None
-                st.session_state.prompt_video_procesado = None
-                st.rerun()
