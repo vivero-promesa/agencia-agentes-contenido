@@ -1,49 +1,53 @@
 import streamlit as st
-import agente_blog # Asumiendo que así importas tu lógica actual
-import agente_video # Importamos el nuevo agente
+from google import genai
+import time
 
-st.set_page_config(page_title="Centro de Comando - ViveroOnline", page_icon="🌱")
-st.title("🌱 Centro de Comando - ViveroOnline")
+def get_video_client():
+    """
+    Inicializa el cliente de Google GenAI de forma segura.
+    Retorna el cliente o lanza una excepción si la llave no existe.
+    """
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        return genai.Client(api_key=api_key)
+    except Exception as e:
+        st.error(f"Error de configuración de Google AI Studio: {e}")
+        return None
 
-# Crear las pestañas
-tab_texto, tab_video = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video (Veo 3)"])
+def generar_broll_veo(especie, estilo, entorno):
+    """
+    Agente encargado de generar B-Roll con Veo 3.
+    Recibe los parámetros, construye el prompt y gestiona la llamada a la API.
+    """
+    client = get_video_client()
+    if not client:
+        return None, "Error: Cliente de Google no inicializado."
 
-# --- PESTAÑA 1: TEXTOS (Tu código actual) ---
-with tab_texto:
-    st.write("Selecciona el formato de contenido:")
-    formato = st.selectbox(
-        "Formato",
-        ["Reel/TikTok", "Artículo de Blog"],
-        label_visibility="collapsed"
+    # Prompt técnico optimizado para Veo 3
+    prompt_final = (
+        f"Video promocional hiperrealista 4K. {estilo}. "
+        f"Sujeto principal: {especie}. "
+        f"Contexto y atmósfera: {entorno}. "
+        f"Calidad cinematográfica, texturas orgánicas nítidas, colores vivos."
     )
-    
-    if st.button("Generar Contenido con IA", key="btn_texto"):
-        st.success(f"Generando {formato}...")
-        # Aquí llamas a tu función actual, ej: agente_blog.generar(...)
 
-# --- PESTAÑA 2: VIDEOS ---
-with tab_video:
-    st.subheader("Clips Promocionales")
-    st.write("Crea videos cortos de alta calidad para redes sociales o WhatsApp.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        especie = st.text_input("Planta/Especie objetivo (Ej. Orquídeas Phalaenopsis)")
-    with col2:
-        estilo = st.selectbox("Estilo visual", ["Cinematográfico", "Primer Plano (Macro)", "Toma aérea"])
+    try:
+        # Llamada asíncrona a la API de generación de video
+        # Nota: Ajusta 'model' según el endpoint activo en tu consola de Google
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=prompt_final,
+            config={"aspect_ratio": "9:16"}
+        )
         
-    contexto = st.text_area("Detalles del entorno (Ej. Luz de atardecer, follaje verde intenso):")
-
-    if st.button("Generar Video con Veo 3", type="primary"):
-        if especie:
-            with st.spinner("Generando video con Veo 3... (Esto puede tomar unos minutos)"):
-                # Llamamos al nuevo agente
-                resultado = agente_video.generar_video_promocional(especie, estilo, contexto)
-                
-                if "Error" not in resultado:
-                    st.success("¡Video generado con éxito!")
-                    # st.video(resultado) # Descomentar cuando la API devuelva el archivo real
-                else:
-                    st.error(resultado)
+        # Extraer la URL de la respuesta
+        if hasattr(operation, 'generated_videos') and operation.generated_videos:
+            return operation.generated_videos[0].video.uri, prompt_final
         else:
-            st.warning("Por favor, ingresa al menos la especie o planta objetivo.")
+            return operation.output, prompt_final
+
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+            return None, "CUOTA_AGOTADA"
+        return None, f"Error en API Veo: {error_msg}"
