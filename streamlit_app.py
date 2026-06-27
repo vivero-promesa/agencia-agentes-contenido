@@ -1,62 +1,201 @@
 import streamlit as st
 import os
-from supabase import create_client
-from openai import OpenAI
+from dotenv import load_dotenv
+from supabase import create_client, Client
 from google import genai
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="ViveroOnline Comando", layout="wide", page_icon="🌱")
+# Importación de tus agentes existentes
+from agente import redactar_guion_viral
+from agente_blog import redactar_articulo_seo
+
+# ==========================================
+# 0. CONFIGURACIÓN DE PÁGINA (Debe ir primero)
+# ==========================================
+st.set_page_config(page_title="Agencia ViveroOnline", layout="wide", page_icon="🌱")
 st.title("🌱 Centro de Comando - ViveroOnline")
 
-# --- CONEXIONES SEGURAS ---
+# ==========================================
+# 1. MANEJO PROFESIONAL DE SECRETOS (Local + Nube)
+# ==========================================
+load_dotenv() # Carga el .env en desarrollo local
+
 def get_secret(key):
-    return st.secrets.get(key, os.getenv(key))
+    """Busca la llave en la nube (st.secrets); si no está, usa el .env local."""
+    try:
+        return st.secrets[key]
+    except KeyError:
+        return os.getenv(key)
 
-# Inicializar clientes
+# ==========================================
+# 2. INICIALIZACIÓN DE CLIENTES
+# ==========================================
+# Supabase
 try:
-    supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_KEY"))
-    groq_client = OpenAI(api_key=get_secret("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1")
-    gemini_client = genai.Client(api_key=get_secret("GEMINI_API_KEY"))
+    url_supabase = get_secret("SUPABASE_URL")
+    clave_supabase = get_secret("SUPABASE_KEY")
+    supabase: Client = create_client(url_supabase, clave_supabase)
 except Exception as e:
-    st.error(f"Error de conexión: {e}")
+    st.error(f"Error conectando a la base de datos: {e}")
+    supabase = None
 
-# --- PESTAÑAS ---
-tab1, tab2 = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video"])
+# Google GenAI (Veo 3)
+try:
+    client_ai = genai.Client(api_key=get_secret("GEMINI_API_KEY"))
+except Exception:
+    client_ai = None
+
+# ==========================================
+# 3. MEMORIA DE ESTADOS (Session State)
+# ==========================================
+if "contenido_actual" not in st.session_state: st.session_state.contenido_actual = None
+if "tabla_destino" not in st.session_state: st.session_state.tabla_destino = None
+if "video_url_actual" not in st.session_state: st.session_state.video_url_actual = None
+if "prompt_video_procesado" not in st.session_state: st.session_state.prompt_video_procesado = None
+
+# ==========================================
+# 4. ARQUITECTURA DE PESTAÑAS
+# ==========================================
+tab_texto, tab_video = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video (Veo 3)"])
 
 # --- PESTAÑA 1: TEXTOS ---
-with tab1:
-    tipo = st.selectbox("Formato:", ["Reel/TikTok", "Artículo de Blog"], key="t1")
-    tema = st.text_input("Tema del contenido:", key="t2")
+with tab_texto:
+    st.subheader("Creador de Contenido Escrito")
     
-    if st.button("Generar Contenido"):
-        prompt = f"Actúa como experto en Viveros y escribe un {tipo} sobre {tema}. Estructura profesional y persuasiva."
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        st.session_state.texto = response.choices[0].message.content
-        st.rerun()
+    tipo_formato = st.selectbox("Selecciona el formato de contenido:", ["Reel/TikTok", "Artículo de Blog"], key="sb_formato")
+    tema_input = st.text_input("¿De qué quieres que trate el contenido?", key="ti_tema")
 
-    if "texto" in st.session_state:
-        st.markdown(st.session_state.texto)
+    if st.button("Generar Contenido con IA", type="primary", key="btn_generar_texto"):
+        if tema_input:
+            with st.spinner("Conectando con la IA... 🧠"):
+                try:
+                    if tipo_formato == "Reel/TikTok":
+                        st.session_state.contenido_actual = redactar_guion_viral(tema=tema_input, tipo_publico="B2C")
+                        st.session_state.tabla_destino = "guiones"
+                    else:
+                        st.session_state.contenido_actual = redactar_articulo_seo(tema=tema_input)
+                        st.session_state.tabla_destino = "blog_posts"
+                except Exception as e:
+                    st.error(f"Error de conexión con el agente de texto: {e}")
+        else:
+            st.warning("Por favor, ingresa un tema.")
+
+    if st.session_state.contenido_actual:
+        st.success(f"¡{tipo_formato} generado con éxito!")
+        st.markdown(st.session_state.contenido_actual)
+        
+        st.markdown("### ¿Qué deseas hacer?")
+        col_a, col_b = st.columns(2)
+        
+        with col_a:
+            if st.button("✅ Aprobar y Guardar Texto", key="btn_aprobar_texto"):
+                if supabase:
+                    try:
+                        datos = {"tema": tema_input, "contenido": st.session_state.contenido_actual}
+                        supabase.table(st.session_state.tabla_destino).insert(datos).execute()
+                        
+                        st.success(f"¡Guardado exitosamente en {st.session_state.tabla_destino}!")
+                        st.session_state.contenido_actual = None
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al guardar texto: {e}")
+                else:
+                    st.error("No hay conexión a la base de datos.")
+                    
+        with col_b:
+            if st.button("❌ Rechazar Texto", key="btn_rechazar_texto"):
+                st.session_state.contenido_actual = None
+                st.rerun()
 
 # --- PESTAÑA 2: VIDEO ---
-with tab2:
-    especie = st.text_input("Protagonista (Planta/Lugar):", key="v1")
-    if st.button("Generar B-Roll con Veo 3"):
-        with st.spinner("Renderizando..."):
-            try:
-                prompt_final = f"Video 4K, {especie}, estilo comercial cinematográfico."
-                op = gemini_client.models.generate_videos(
-                    model="veo-3.1-generate-preview",
-                    prompt=prompt_final,
-                    config={"aspect_ratio": "9:16"}
-                )
-                # Intento de obtener la URL
-                st.session_state.video = op.generated_videos[0].video.uri if hasattr(op, 'generated_videos') else "Error"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Fallo en API Veo: {e}")
+with tab_video:
+    st.subheader("Generación Estratégica de B-Roll (Google Veo 3)")
+    st.write("Selecciona tu objetivo comercial. El sistema configurará automáticamente la dirección de fotografía para maximizar la conversión.")
 
-    if "video" in st.session_state:
-        st.video(st.session_state.video)
+    if not client_ai:
+        st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada o el SDK no se pudo inicializar.")
+    
+    # El "Cerebro" de las Plantillas
+    PLANTILLAS_ESTRATEGICAS = {
+        "🌱 Conseguir nuevos viveristas": {
+            "estilo": "Estilo documental agrícola (Cámara en mano, luz de mañana)",
+            "entorno": "Vivero moderno y organizado, sensación de abundancia y negocio próspero, agricultor revisando plantas de forma profesional."
+        },
+        "🛒 Vender una planta específica": {
+            "estilo": "Primer plano extremo (Detalle de textura de hojas y follaje)",
+            "entorno": "Gotas de rocío sobre los pétalos, fondo muy desenfocado (efecto bokeh) para resaltar el producto, iluminación de estudio natural."
+        },
+        "🏡 Promocionar el Vivero (Institucional)": {
+            "estilo": "Toma aérea comercial (Paneo lento sobre camas de cultivo)",
+            "entorno": "Invernaderos limpios y extensos, luz de atardecer dorada, simetría en la organización de las macetas, ambiente de confianza B2B."
+        },
+        "📦 Lanzamiento de inventario": {
+            "estilo": "Cinematográfico (Movimiento dinámico rápido, colores vivos)",
+            "entorno": "Múltiples especies agrupadas, colores altamente saturados y vibrantes, sensación de abundancia y novedad, luz brillante."
+        },
+        "🎄 Campañas estacionales": {
+            "estilo": "Cinematográfico (Iluminación cálida y emocional)",
+            "entorno": "Plantas decorativas de temporada, atmósfera festiva y acogedora, colores de contraste suaves, ideal para regalo."
+        }
+    }
+
+    objetivo_seleccionado = st.selectbox(
+        "🎯 ¿Cuál es el objetivo comercial de este clip?", 
+        list(PLANTILLAS_ESTRATEGICAS.keys())
+    )
+    
+    st.markdown("---")
+    
+    config_actual = PLANTILLAS_ESTRATEGICAS[objetivo_seleccionado]
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        especie_planta = st.text_input("🌿 Especie o elemento protagonista:", placeholder="Ej. Orquídeas, Invernadero general, Anturios")
+    with c2:
+        estilo_visual = st.text_input("🎥 Dirección de cámara (Auto-configurado):", value=config_actual["estilo"])
+        
+    detalles_entorno = st.text_area("🌅 Detalles del entorno (Auto-configurado):", value=config_actual["entorno"])
+
+    if st.button("Generar B-Roll con Veo 3", type="primary", key="btn_generar_video_v2"):
+        if especie_planta:
+            prompt_final_veo = (
+                f"Video promocional hiperrealista 4K. {estilo_visual}. "
+                f"Sujeto principal: {especie_planta}. "
+                f"Contexto y atmósfera: {detalles_entorno}. "
+                f"Calidad cinematográfica, sin textos, texturas orgánicas nítidas."
+            )
+            
+            st.session_state.prompt_video_procesado = prompt_final_veo
+            
+            with st.spinner("Renderizando clip cinemático... (Toma ~1 minuto) 🎬"):
+                try:
+                    operation = client_ai.models.generate_videos(
+                        model="veo-3.1-generate-preview",
+                        prompt=prompt_final_veo,
+                        config={"aspect_ratio": "9:16"}
+                    )
+                    
+                    if hasattr(operation, 'generated_videos') and operation.generated_videos:
+                        st.session_state.video_url_actual = operation.generated_videos[0].video.uri
+                    else:
+                        st.session_state.video_url_actual = operation.output
+                        
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        st.warning("⏳ Límite de cuota gratuita alcanzado. Por favor, espera unos minutos.")
+                    else:
+                        st.error(f"Fallo en la API de Google: {e}")
+        else:
+            st.warning("⚠️ Ingresa una especie o protagonista para disparar la generación.")
+
+    if st.session_state.video_url_actual:
+        st.success("¡B-Roll renderizado con éxito! Descárgalo y únelo a tus textos.")
+        with st.expander("Ver configuración técnica del Prompt (Modo Dios)"):
+            st.code(st.session_state.prompt_video_procesado)
+        
+        st.video(st.session_state.video_url_actual)
+        
+        if st.button("🗑️ Limpiar y generar un nuevo clip", key="btn_limpiar_clip"):
+            st.session_state.video_url_actual = None
+            st.session_state.prompt_video_procesado = None
+            st.rerun()
