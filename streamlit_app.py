@@ -1,74 +1,62 @@
 import streamlit as st
 import os
-from supabase import create_client, Client
-from agente import redactar_guion_viral, redactar_articulo_seo
-from agente_video import generar_broll_veo
+from supabase import create_client
+from openai import OpenAI
+from google import genai
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Agencia ViveroOnline", layout="wide", page_icon="🌱")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="ViveroOnline Comando", layout="wide", page_icon="🌱")
 st.title("🌱 Centro de Comando - ViveroOnline")
 
-# --- CONEXIÓN A SUPABASE ---
+# --- CONEXIONES SEGURAS ---
+def get_secret(key):
+    return st.secrets.get(key, os.getenv(key))
+
+# Inicializar clientes
 try:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    supabase = create_client(url, key)
+    supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_KEY"))
+    groq_client = OpenAI(api_key=get_secret("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1")
+    gemini_client = genai.Client(api_key=get_secret("GEMINI_API_KEY"))
 except Exception as e:
-    st.error(f"Error conectando a Supabase: {e}")
+    st.error(f"Error de conexión: {e}")
 
-# --- ESTADOS GLOBALES ---
-if "contenido_actual" not in st.session_state: st.session_state.contenido_actual = None
-if "video_url_actual" not in st.session_state: st.session_state.video_url_actual = None
+# --- PESTAÑAS ---
+tab1, tab2 = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video"])
 
-# --- ESTRUCTURA ---
-tab1, tab2 = st.tabs(["📝 Textos y Guiones", "🎬 Generador de Video (Veo 3)"])
-
-# PESTAÑA 1: TEXTOS (Funcionalidad garantizada)
+# --- PESTAÑA 1: TEXTOS ---
 with tab1:
-    st.subheader("Creador de Contenido Escrito")
-    tipo = st.selectbox("Formato:", ["Reel/TikTok", "Artículo de Blog"])
-    tema = st.text_input("Tema:")
+    tipo = st.selectbox("Formato:", ["Reel/TikTok", "Artículo de Blog"], key="t1")
+    tema = st.text_input("Tema del contenido:", key="t2")
     
     if st.button("Generar Contenido"):
-        with st.spinner("Redactando con IA..."):
+        prompt = f"Actúa como experto en Viveros y escribe un {tipo} sobre {tema}. Estructura profesional y persuasiva."
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        st.session_state.texto = response.choices[0].message.content
+        st.rerun()
+
+    if "texto" in st.session_state:
+        st.markdown(st.session_state.texto)
+
+# --- PESTAÑA 2: VIDEO ---
+with tab2:
+    especie = st.text_input("Protagonista (Planta/Lugar):", key="v1")
+    if st.button("Generar B-Roll con Veo 3"):
+        with st.spinner("Renderizando..."):
             try:
-                if tipo == "Reel/TikTok":
-                    st.session_state.contenido_actual = redactar_guion_viral(tema, "B2C")
-                else:
-                    st.session_state.contenido_actual = redactar_articulo_seo(tema)
+                prompt_final = f"Video 4K, {especie}, estilo comercial cinematográfico."
+                op = gemini_client.models.generate_videos(
+                    model="veo-3.1-generate-preview",
+                    prompt=prompt_final,
+                    config={"aspect_ratio": "9:16"}
+                )
+                # Intento de obtener la URL
+                st.session_state.video = op.generated_videos[0].video.uri if hasattr(op, 'generated_videos') else "Error"
                 st.rerun()
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Fallo en API Veo: {e}")
 
-    if st.session_state.contenido_actual:
-        st.markdown(st.session_state.contenido_actual)
-        if st.button("Limpiar"):
-            st.session_state.contenido_actual = None
-            st.rerun()
-
-# PESTAÑA 2: VIDEO (Funcionalidad Aislada)
-with tab2:
-    st.subheader("Generación Estratégica B-Roll")
-    
-    plantillas = {
-        "🌱 Conseguir nuevos viveristas": {"estilo": "Estilo documental, cámara en mano", "entorno": "Vivero moderno en la Sabana"},
-        "🛒 Vender planta": {"estilo": "Primer plano extremo, detalle de hojas", "entorno": "Gotas de rocío, luz de estudio natural"}
-    }
-    
-    obj = st.selectbox("Objetivo:", list(plantillas.keys()))
-    especie = st.text_input("Protagonista (Planta/Lugar):")
-    
-    if st.button("Generar B-Roll"):
-        with st.spinner("Renderizando en Veo 3..."):
-            try:
-                url, feedback = generar_broll_veo(especie, plantillas[obj]["estilo"], plantillas[obj]["entorno"])
-                if url:
-                    st.session_state.video_url_actual = url
-                    st.success("¡Clip generado!")
-                else:
-                    st.warning(f"Estado: {feedback}")
-            except Exception as e:
-                st.error("Fallo crítico en el motor de video.")
-
-    if st.session_state.video_url_actual:
-        st.video(st.session_state.video_url_actual)
+    if "video" in st.session_state:
+        st.video(st.session_state.video)
