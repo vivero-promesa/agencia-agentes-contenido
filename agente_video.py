@@ -2,6 +2,9 @@ import streamlit as st
 from google import genai
 import json
 
+from brand_book import GUIA_VISUAL_VIDEO
+
+
 def get_video_client():
     """Inicializa de forma segura el cliente oficial de Google GenAI."""
     try:
@@ -13,22 +16,23 @@ def get_video_client():
         st.error(f"Error de configuración en las llaves de Google AI: {e}")
         return None
 
+
 def optimizar_prompt_produccion(escena_data):
     """
     Agente Productor: Toma la definición humana de la escena y la traduce
-    a un prompt de ingeniería visual ultra-detallado para Veo 3.1.
+    a un prompt de ingeniería visual para Veo 3.1, anclado al Brand Book
+    real de ViveroOnline (vivero familiar de la Sabana de Bogotá), no a
+    una estética genérica de bodega industrial.
     """
-    # Inyección de estándares B2B "AgTech de Tierra"
     prompt_base = (
-        f"Estilo: Documental cinematográfico industrial, hiperrealista, resolución 4K. "
-        f"Formato: Vertical 9:16. "
-        f"Contexto: Operación logística de vivero mayorista (AgTech). "
-        f"Sujeto principal y acción: {escena_data.get('visual', 'operación de carga')}. "
-        f"Atmósfera: {escena_data.get('emocion', 'profesional y eficiente')}, luz natural de la Sabana, colores orgánicos vivos. "
-        f"Cámara: {escena_data.get('camara', 'Plano detalle, movimiento suave de estabilizador')}. "
+        f"Sujeto principal y acción: {escena_data.get('visual', 'trabajo diario en el vivero')}. "
+        f"Atmósfera: {escena_data.get('emocion', 'cercana, tranquila, auténtica')}. "
+        f"Cámara: {escena_data.get('camara', 'plano medio, movimiento suave de estabilizador')}. "
+        f"{GUIA_VISUAL_VIDEO.strip()} "
         f"Regla estricta: NO incluir texto en el video. Dejar tercio inferior despejado para subtítulos."
     )
     return prompt_base
+
 
 def generar_video_escena(id_escena, prompt_tecnico):
     """Llama a la API de Google Veo 3.1 para generar el B-Roll."""
@@ -42,10 +46,10 @@ def generar_video_escena(id_escena, prompt_tecnico):
             prompt=prompt_tecnico,
             config={
                 "aspect_ratio": "9:16",
-                "duration_seconds": 5 # Control de ritmo para redes sociales
+                "duration_seconds": 5  # Control de ritmo para redes sociales
             }
         )
-        
+
         # Extracción segura de la URI del video
         if hasattr(operation, 'generated_videos') and operation.generated_videos:
             return operation.generated_videos[0].video.uri
@@ -54,6 +58,7 @@ def generar_video_escena(id_escena, prompt_tecnico):
     except Exception as e:
         st.error(f"Error generando render para la escena {id_escena}: {e}")
         return None
+
 
 def ejecutar_pipeline_agencia(storyboard_json):
     """
@@ -69,16 +74,16 @@ def ejecutar_pipeline_agencia(storyboard_json):
 
     for clave, escena in storyboard.items():
         st.write(f"🎬 **Renderizando: {escena.get('nombre', clave)}**")
-        
+
         if escena.get("tipo") == "IA_GENERATIVE":
             prompt_listo = optimizar_prompt_produccion(escena)
             st.caption(f"🤖 *Prompt enviado a Veo 3.1:* {prompt_listo}")
-            
+
             url_video = generar_video_escena(clave, prompt_listo)
             resultados[clave] = {"status": "Listo", "url": url_video, "texto": escena.get("texto", "")}
-            
+
         elif escena.get("tipo") == "UI_RECORDING":
             st.info(f"📱 *Nota:* Esta escena requiere grabación de pantalla de app.viveroonline.com.co.")
             resultados[clave] = {"status": "Requiere_Media_Local", "texto": escena.get("texto", "")}
-            
+
     return resultados
