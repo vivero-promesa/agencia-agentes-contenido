@@ -22,9 +22,15 @@ key_service = st.secrets.get("SUPABASE_SERVICE_KEY")
 supabase = create_client(url_ext, key_service) if url_ext and key_service else None
 
 # ==========================================
-# ARQUITECTURA DE PESTAÑAS
+# ARQUITECTURA DE PESTAÑAS (Ahora con Motor 360)
 # ==========================================
-tab_texto, tab_whatsapp, tab_video, tab_seo = st.tabs(["📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO"])
+tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360 = st.tabs([
+    "📝 Textos", 
+    "💬 WhatsApp", 
+    "🎬 Video", 
+    "🚀 SEO",
+    "🔥 Campaña 360"
+])
 
 # --- PESTAÑA 1: TEXTOS ---
 with tab_texto:
@@ -111,7 +117,6 @@ with tab_seo:
                 with st.spinner("Decodificando esquema de base de datos y generando contenido..."):
                     try:
                         # 1. Obtener el último registro del inventario (Blindaje B2B)
-                        # Filtramos para que solo tome plantas 'disponibles' y con stock mayor o igual a 20
                         res_inv = supabase.table("inventario") \
                             .select("*") \
                             .eq("estado_planta", "disponible") \
@@ -199,3 +204,91 @@ with tab_seo:
                         st.markdown(articulo.contenido_md)
             else:
                 st.warning("Completa los campos requeridos para proceder.")
+
+# --- PESTAÑA 5: ORQUESTADOR DE CAMPAÑA 360 ---
+with tab_360:
+    st.subheader("🔥 Orquestador Maestro de Campaña 360")
+    st.markdown("Este botón lee el último lote disponible de alto volumen en Supabase y dispara todos los agentes simultáneamente para crear una campaña B2B unificada.")
+    
+    if st.button("⚡ Lanzar Campaña 360", type="primary"):
+        if not supabase:
+            st.error("Falta configurar la conexión a Supabase en los Secrets.")
+        else:
+            with st.spinner("Sincronizando agentes y consultando inventario B2B..."):
+                try:
+                    # 1. EXTRACCIÓN DE DATOS
+                    res_inv = supabase.table("inventario") \
+                        .select("*").eq("estado_planta", "disponible").gte("stock", 20) \
+                        .order("inventario_id", desc=True).limit(1).execute()
+                    
+                    if not res_inv.data:
+                        st.warning("No hay inventario 'disponible' con más de 20 unidades para lanzar una campaña.")
+                    else:
+                        item = res_inv.data[0]
+                        muestra_planta = supabase.table("plantas").select("*").limit(1).execute().data[0]
+                        muestra_vivero = supabase.table("viveros").select("*").limit(1).execute().data[0]
+                        
+                        col_id_planta = [c for c in muestra_planta.keys() if "id" in c.lower()][0]
+                        col_id_vivero = [c for c in muestra_vivero.keys() if "id" in c.lower()][0]
+                        
+                        planta_data = supabase.table("plantas").select("*").eq(col_id_planta, item["planta_id"]).execute().data[0]
+                        vivero_data = supabase.table("viveros").select("*").eq(col_id_vivero, item["vivero_id"]).execute().data[0]
+                        
+                        nombre_especie = planta_data.get("especie_nombre") or planta_data.get("nombre") or f"Especie ID {item['planta_id']}"
+                        nombre_vivero = vivero_data.get("vendedor_nombre") or vivero_data.get("nombre") or f"Vivero ID {item['vivero_id']}"
+                        locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
+                        
+                        datos_lote = {
+                            "especie": nombre_especie, "cantidad": item["stock"], 
+                            "ubicacion": locacion, "vendedor": nombre_vivero
+                        }
+                        
+                        st.info(f"🎯 **Target de Campaña:** {item['stock']} {nombre_especie} en {locacion} ({nombre_vivero})")
+                        
+                        # 2. EJECUCIÓN EN PARALELO DE AGENTES
+                        articulo_360 = generar_seo_desde_inventario(datos_lote)
+                        
+                        obj_dinamico = f"Vender lote urgente de {item['stock']} {nombre_especie} ubicadas en {locacion}."
+                        wa_360 = generar_campana_whatsapp(obj_dinamico)
+                        
+                        tema_video = f"Carga logística y revisión de calidad de {item['stock']} {nombre_especie} en {locacion}."
+                        video_360 = redactar_guion_viral(tema_video)
+                        
+                        # 3. RENDERIZADO DEL DASHBOARD DE CAMPAÑA
+                        st.success("✅ Campaña 360 generada con éxito.")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            with st.expander("🚀 1. Artículo SEO B2B", expanded=True):
+                                if articulo_360:
+                                    st.markdown(f"### {articulo_360.titulo_h1}")
+                                    st.markdown(articulo_360.contenido_md)
+                                else:
+                                    st.error("Error generando SEO.")
+                                    
+                            with st.expander("🎬 3. Guion Visual (Veo 3)", expanded=True):
+                                if video_360:
+                                    st.write(video_360)
+                                else:
+                                    st.error("Error generando Video.")
+
+                        with col2:
+                            with st.expander("💬 2. Estrategia WhatsApp", expanded=True):
+                                if wa_360:
+                                    st.text_area("Copy Rápido:", value=wa_360.mensaje_texto, height=100)
+                                    st.text_area("Guion de Audio:", value=wa_360.guion_nota_voz, height=150)
+                                    st.markdown(f"[🔗 Enlace Directo WhatsApp]({wa_360.link_wa})")
+                                    
+                                    if st.button("🎧 Sintetizar Audio Campaña"):
+                                        with st.spinner("Sintetizando..."):
+                                            audio_campana = generar_audio_elevenlabs(wa_360.guion_nota_voz)
+                                            if audio_campana:
+                                                st.audio(audio_campana, format="audio/mp3")
+                                            else:
+                                                st.warning("Fallo en ElevenLabs.")
+                                else:
+                                    st.error("Error generando WhatsApp.")
+                                    
+                except Exception as e:
+                    st.error(f"Error crítico en la orquestación 360: {e}")
