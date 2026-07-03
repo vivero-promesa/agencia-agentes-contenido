@@ -205,10 +205,10 @@ with tab_seo:
             else:
                 st.warning("Completa los campos requeridos para proceder.")
 
-# --- PESTAÑA 5: ORQUESTADOR DE CAMPAÑA 360 ---
+# --- PESTAÑA 5: ORQUESTADOR DE CAMPAÑA 360 (Corregida con Persistencia) ---
 with tab_360:
     st.subheader("🔥 Orquestador Maestro de Campaña 360")
-    st.markdown("Este botón lee el último lote disponible de alto volumen en Supabase y dispara todos los agentes simultáneamente para crear una campaña B2B unificada.")
+    st.markdown("Genera una campaña B2B unificada (SEO, WhatsApp y Video) basada en el inventario real de alto volumen.")
     
     if st.button("⚡ Lanzar Campaña 360", type="primary"):
         if not supabase:
@@ -216,13 +216,12 @@ with tab_360:
         else:
             with st.spinner("Sincronizando agentes y consultando inventario B2B..."):
                 try:
-                    # 1. EXTRACCIÓN DE DATOS
                     res_inv = supabase.table("inventario") \
                         .select("*").eq("estado_planta", "disponible").gte("stock", 20) \
                         .order("inventario_id", desc=True).limit(1).execute()
                     
                     if not res_inv.data:
-                        st.warning("No hay inventario 'disponible' con más de 20 unidades para lanzar una campaña.")
+                        st.warning("No hay inventario disponible con más de 20 unidades.")
                     else:
                         item = res_inv.data[0]
                         muestra_planta = supabase.table("plantas").select("*").limit(1).execute().data[0]
@@ -238,57 +237,49 @@ with tab_360:
                         nombre_vivero = vivero_data.get("vendedor_nombre") or vivero_data.get("nombre") or f"Vivero ID {item['vivero_id']}"
                         locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
                         
-                        datos_lote = {
+                        st.session_state.c360_lote = {
                             "especie": nombre_especie, "cantidad": item["stock"], 
                             "ubicacion": locacion, "vendedor": nombre_vivero
                         }
                         
-                        st.info(f"🎯 **Target de Campaña:** {item['stock']} {nombre_especie} en {locacion} ({nombre_vivero})")
+                        # Guardamos los resultados de los agentes en el estado de la sesión
+                        st.session_state.c360_seo = generar_seo_desde_inventario(st.session_state.c360_lote)
+                        st.session_state.c360_wa = generar_campana_whatsapp(f"Vender lote urgente de {item['stock']} {nombre_especie} en {locacion}.")
+                        st.session_state.c360_video = redactar_guion_viral(f"Carga logística y revisión de calidad de {item['stock']} {nombre_especie} en {locacion}.")
+                        st.session_state.c360_lista = True
                         
-                        # 2. EJECUCIÓN EN PARALELO DE AGENTES
-                        articulo_360 = generar_seo_desde_inventario(datos_lote)
-                        
-                        obj_dinamico = f"Vender lote urgente de {item['stock']} {nombre_especie} ubicadas en {locacion}."
-                        wa_360 = generar_campana_whatsapp(obj_dinamico)
-                        
-                        tema_video = f"Carga logística y revisión de calidad de {item['stock']} {nombre_especie} en {locacion}."
-                        video_360 = redactar_guion_viral(tema_video)
-                        
-                        # 3. RENDERIZADO DEL DASHBOARD DE CAMPAÑA
-                        st.success("✅ Campaña 360 generada con éxito.")
-                        
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            with st.expander("🚀 1. Artículo SEO B2B", expanded=True):
-                                if articulo_360:
-                                    st.markdown(f"### {articulo_360.titulo_h1}")
-                                    st.markdown(articulo_360.contenido_md)
-                                else:
-                                    st.error("Error generando SEO.")
-                                    
-                            with st.expander("🎬 3. Guion Visual (Veo 3)", expanded=True):
-                                if video_360:
-                                    st.write(video_360)
-                                else:
-                                    st.error("Error generando Video.")
-
-                        with col2:
-                            with st.expander("💬 2. Estrategia WhatsApp", expanded=True):
-                                if wa_360:
-                                    st.text_area("Copy Rápido:", value=wa_360.mensaje_texto, height=100)
-                                    st.text_area("Guion de Audio:", value=wa_360.guion_nota_voz, height=150)
-                                    st.markdown(f"[🔗 Enlace Directo WhatsApp]({wa_360.link_wa})")
-                                    
-                                    if st.button("🎧 Sintetizar Audio Campaña"):
-                                        with st.spinner("Sintetizando..."):
-                                            audio_campana = generar_audio_elevenlabs(wa_360.guion_nota_voz)
-                                            if audio_campana:
-                                                st.audio(audio_campana, format="audio/mp3")
-                                            else:
-                                                st.warning("Fallo en ElevenLabs.")
-                                else:
-                                    st.error("Error generando WhatsApp.")
-                                    
                 except Exception as e:
-                    st.error(f"Error crítico en la orquestación 360: {e}")
+                    st.error(f"Error en la orquestación: {e}")
+
+    # Renderizado fuera del botón principal usando persistencia
+    if st.session_state.get("c360_lista"):
+        lote = st.session_state.c360_lote
+        st.info(f"🎯 **Campaña Activa:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']} ({lote['vendedor']})")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            with st.expander("🚀 1. Artículo SEO B2B", expanded=True):
+                if st.session_state.c360_seo:
+                    st.markdown(f"### {st.session_state.c360_seo.titulo_h1}")
+                    st.markdown(st.session_state.c360_seo.contenido_md)
+            
+            with st.expander("🎬 3. Guion Visual (Veo 3)", expanded=True):
+                if st.session_state.c360_video:
+                    st.write(st.session_state.c360_video)
+
+        with col2:
+            with st.expander("💬 2. Estrategia WhatsApp", expanded=True):
+                wa = st.session_state.c360_wa
+                if wa:
+                    st.text_area("Copy Rápido:", value=wa.mensaje_texto, height=100)
+                    st.text_area("Guion de Audio:", value=wa.guion_nota_voz, height=150)
+                    st.markdown(f"[🔗 Enlace Directo WhatsApp]({wa.link_wa})")
+                    
+                    # Este botón ahora funciona perfectamente sin borrar la pantalla
+                    if st.button("🎧 Sintetizar Audio Campaña"):
+                        with st.spinner("Sintetizando..."):
+                            audio_campana = generar_audio_elevenlabs(wa.guion_nota_voz)
+                            if audio_campana:
+                                st.audio(audio_campana, format="audio/mp3")
+                            else:
+                                st.warning("Fallo en la API de ElevenLabs.")
