@@ -13,7 +13,7 @@ from agente_blog import redactar_articulo_seo
 # Importación de los nuevos agentes estructurados
 from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario
 
-# Importación del nuevo motor de audio (ElevenLabs)
+# Importación del motor de audio (ElevenLabs)
 from agente_audio import generar_audio_elevenlabs
 
 # ==========================================
@@ -59,6 +59,12 @@ if "contenido_actual" not in st.session_state: st.session_state.contenido_actual
 if "tabla_destino" not in st.session_state: st.session_state.tabla_destino = None
 if "video_url_actual" not in st.session_state: st.session_state.video_url_actual = None
 if "prompt_video_procesado" not in st.session_state: st.session_state.prompt_video_procesado = None
+
+# Estados para la pestaña de WhatsApp (Editables)
+if "wa_copy" not in st.session_state: st.session_state.wa_copy = ""
+if "wa_link" not in st.session_state: st.session_state.wa_link = ""
+if "wa_script" not in st.session_state: st.session_state.wa_script = ""
+if "wa_generado" not in st.session_state: st.session_state.wa_generado = False
 
 # ==========================================
 # 4. ARQUITECTURA DE PESTAÑAS (Fases 1, 2 y 3)
@@ -118,11 +124,11 @@ with tab_texto:
                 st.session_state.contenido_actual = None
                 st.rerun()
 
-# --- PESTAÑA 2: CAMPAÑAS WHATSAPP (Fase 1 + ElevenLabs) ---
+# --- PESTAÑA 2: CAMPAÑAS WHATSAPP (Fase 1 + ElevenLabs + Editable) ---
 with tab_whatsapp:
     st.subheader("Captación Directa (Fricción Cero)")
     st.write("Genera copys cortos y notas de voz para compartir directamente en grupos de viveristas.")
-    
+
     obj_wa = st.text_input("¿Qué quieres comunicar?", placeholder="Ej. Invitarlos a subir sus suculentas a la plataforma sin costo.")
     tel_wa = st.text_input("Número de atención (formato internacional)", value="573000000000")
     
@@ -132,37 +138,53 @@ with tab_whatsapp:
                 try:
                     campana = generar_campana_whatsapp(obj_wa, tel_wa)
                     if campana:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown("### 📱 Copy para Chat")
-                            st.info(campana.mensaje_texto)
-                            st.code(campana.link_wa, language="markdown")
-                        
-                        with col2:
-                            st.markdown("### 🎙️ Guion para Nota de Voz")
-                            st.success(campana.guion_nota_voz)
-                            
-                            # --- INTEGRACIÓN ELEVENLABS ---
-                            if st.button("🎧 Generar Nota de Voz (ElevenLabs)", type="secondary"):
-                                with st.spinner("Sintetizando voz colombiana..."):
-                                    audio_bytes = generar_audio_elevenlabs(campana.guion_nota_voz)
-                                    
-                                    if audio_bytes:
-                                        # Reproductor integrado en Streamlit
-                                        st.audio(audio_bytes, format="audio/mp3")
-                                        
-                                        # Botón de descarga directa
-                                        st.download_button(
-                                            label="📥 Descargar .mp3 para WhatsApp",
-                                            data=audio_bytes,
-                                            file_name="nota_voz_viveroonline.mp3",
-                                            mime="audio/mp3",
-                                            type="primary"
-                                        )
+                        # Guardamos los resultados en el estado de la sesión
+                        st.session_state.wa_copy = campana.mensaje_texto
+                        st.session_state.wa_link = campana.link_wa
+                        st.session_state.wa_script = campana.guion_nota_voz
+                        st.session_state.wa_generado = True
                 except Exception as e:
-                     st.error(f"Error generando campaña: Asegúrate de tener creado el archivo agentes_crecimiento.py y agente_audio.py. Detalle: {e}")
+                     st.error(f"Error generando campaña. Detalle: {e}")
         else:
              st.warning("Debes ingresar un objetivo para la campaña.")
+
+    # Si ya se generó el kit, mostramos los campos editables
+    if st.session_state.wa_generado:
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📱 Copy para Chat (Editable)")
+            # Usamos text_area y text_input enlazados al session_state
+            st.session_state.wa_copy = st.text_area("Edita tu mensaje aquí:", value=st.session_state.wa_copy, height=150)
+            st.session_state.wa_link = st.text_input("Enlace WA:", value=st.session_state.wa_link)
+            
+            st.info("💡 Haz tus ajustes arriba. Selecciona el texto, cópialo y envíalo por WhatsApp.")
+
+        with col2:
+            st.markdown("### 🎙️ Guion para Nota de Voz (Editable)")
+            # El guion ahora es editable
+            st.session_state.wa_script = st.text_area("Ajusta el guion antes de grabar:", value=st.session_state.wa_script, height=150)
+            
+            # --- INTEGRACIÓN ELEVENLABS ---
+            # Ahora ElevenLabs leerá la variable st.session_state.wa_script (con tus ediciones)
+            if st.button("🎧 Generar Nota de Voz (ElevenLabs)", type="secondary"):
+                with st.spinner("Sintetizando voz colombiana..."):
+                    try:
+                        audio_bytes = generar_audio_elevenlabs(st.session_state.wa_script)
+                        
+                        if audio_bytes:
+                            st.audio(audio_bytes, format="audio/mp3")
+                            
+                            st.download_button(
+                                label="📥 Descargar .mp3 para WhatsApp",
+                                data=audio_bytes,
+                                file_name="nota_voz_viveroonline.mp3",
+                                mime="audio/mp3",
+                                type="primary"
+                            )
+                    except Exception as e:
+                        st.error(f"Error con el motor de audio: Asegúrate de tener 'agente_audio.py'. Detalle: {e}")
 
 # --- PESTAÑA 3: VIDEO (VEO 3) CON KIT DE EDICIÓN (Fase 2) ---
 with tab_video:
