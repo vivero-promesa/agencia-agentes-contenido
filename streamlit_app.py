@@ -7,6 +7,7 @@ from supabase import create_client, Client
 from agente import redactar_guion_viral, redactar_articulo_seo
 from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario
 from agente_audio import generar_audio_elevenlabs
+from agente_video import ejecutar_pipeline_agencia
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -83,25 +84,71 @@ with tab_whatsapp:
                 else:
                     st.warning("No se pudo generar el audio.")
 
-# --- PESTAÑA 3: VIDEO (B-Roll) ---
+# --- PESTAÑA 3: VIDEO (B-Roll y Producción Veo 3.1) ---
 with tab_video:
-    st.subheader("Generador de Guiones y B-Roll (Veo 3)")
-    tema_video = st.text_input("Concepto visual del video:", placeholder="Ej: Carga logística de orquídeas en camión")
+    st.subheader("🎬 Producción de Video B2B (Veo 3.1)")
+    st.markdown("Diseña el concepto estratégico y renderiza los clips directamente con la API de Google.")
     
-    if st.button("Generar Guion Visual"):
-        if tema_video:
-            with st.spinner("Estructurando tomas y guion..."):
-                try:
-                    resultado_video = redactar_guion_viral(tema_video)
-                    if resultado_video:
-                        st.success("Guion visual generado con éxito.")
+    # PASO 1: IDEACIÓN (GROQ / LLAMA 3)
+    with st.expander("📝 1. Pre-Producción (Generar Concepto y Guion)", expanded=True):
+        tema_video = st.text_input("Concepto visual del comercial:", placeholder="Ej: Lote mayorista de eugenias para constructoras")
+        if st.button("Generar Concepto Visual"):
+            if tema_video:
+                with st.spinner("Estructurando tomas, guion y copy para redes..."):
+                    try:
+                        resultado_video = redactar_guion_viral(tema_video)
+                        st.success("Concepto generado. Úsalo como inspiración para tu Storyboard.")
                         st.write(resultado_video)
+                    except Exception as e:
+                        st.error(f"Error técnico: {e}")
+            else:
+                st.warning("Ingresa un concepto primero.")
+
+    # PASO 2: RENDERIZADO EN LA NUBE (GOOGLE VEO 3.1)
+    with st.expander("🎥 2. Producción (Renderizar Escenas)", expanded=False):
+        st.markdown("Pega el JSON de tu storyboard para enviar las instrucciones técnicas de renderizado a Google Veo.")
+        
+        # Plantilla JSON de ejemplo estructurada para el sector viverista
+        plantilla_json = '''{
+    "escena_1": {
+        "nombre": "Intro Logística",
+        "tipo": "IA_GENERATIVE",
+        "visual": "Camión de carga recibiendo estibas llenas de plantas sanas",
+        "emocion": "Eficiencia y escala industrial",
+        "camara": "Plano general, movimiento de dron lento hacia adelante",
+        "texto": "Capacidad logística en toda la Sabana"
+    },
+    "escena_2": {
+        "nombre": "Detalle de Calidad",
+        "tipo": "IA_GENERATIVE",
+        "visual": "Manos con guantes inspeccionando raíces blancas y sustrato premium",
+        "emocion": "Confianza y calidad técnica",
+        "camara": "Plano detalle (Macro), enfoque nítido",
+        "texto": "Cero mortalidad en obra"
+    }
+}'''
+        storyboard_input = st.text_area("Storyboard (Formato JSON):", value=plantilla_json, height=250)
+        
+        if st.button("🚀 Iniciar Renderizado", type="primary"):
+            with st.spinner("Conectando con Google Veo 3.1 y renderizando clips... (Esto toma tiempo)"):
+                try:
+                    resultados_render = ejecutar_pipeline_agencia(storyboard_input)
+                    if resultados_render:
+                        st.success("¡Pipeline de producción finalizado!")
+                        
+                        # Renderizamos los videos devueltos en la interfaz
+                        for key, data in resultados_render.items():
+                            st.markdown(f"### {key.replace('_', ' ').title()}")
+                            
+                            if data["status"] == "Listo" and data.get("url"):
+                                st.video(data["url"])
+                                st.caption(f"**Texto sugerido para edición:** {data.get('texto', '')}")
+                            else:
+                                st.warning(f"**Estado:** {data['status']} - {data.get('texto', '')}")
                     else:
-                        st.error("El agente no devolvió respuesta.")
+                        st.error("No se pudieron generar los videos. Revisa los logs o tu cuota de API.")
                 except Exception as e:
-                    st.error(f"Error técnico: {e}")
-        else:
-            st.warning("Por favor ingresa un concepto visual.")
+                    st.error(f"Error crítico en el orquestador: {e}")
 
 # --- PESTAÑA 4: SEO PROGRAMÁTICO (Motor Dinámico) ---
 with tab_seo:
