@@ -286,3 +286,6 @@ with tab_seo:
                         st.toast("El artículo ha sido inyectado en la base de datos de producción.")
             except Exception as e:
                 st.error(f"Error en el agente SEO: Asegúrate de tener creado el archivo agentes_crecimiento.py. Detalle: {e}")
+
+# Importación del motor de audio (Añade esta línea junto a tus otros imports)
+from agente_audio import generar_audio_elevenlabs
