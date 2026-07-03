@@ -256,48 +256,67 @@ with tab_360:
             st.error("Falta configurar la conexión a Supabase en los Secrets.")
         else:
             with st.spinner("Sincronizando agentes y consultando inventario B2B..."):
-                try:
+               try:
+                    # 1. Traer los últimos 10 lotes B2B disponibles (Stock alto)
                     res_inv = supabase.table("inventario") \
                         .select("*").eq("estado_planta", "disponible").gte("stock", 20) \
-                        .order("inventario_id", desc=True).limit(1).execute()
+                        .order("inventario_id", desc=True).limit(10).execute()
                     
                     if not res_inv.data:
                         st.warning("No hay inventario disponible con más de 20 unidades.")
                     else:
-                        item = res_inv.data[0]
-                        muestra_planta = supabase.table("plantas").select("*").limit(1).execute().data[0]
-                        muestra_vivero = supabase.table("viveros").select("*").limit(1).execute().data[0]
+                        # 2. Consultar qué lotes YA tuvieron campaña
+                        res_campanas = supabase.table("campanas_ejecutadas").select("inventario_id").execute()
+                        lotes_procesados = [c["inventario_id"] for c in res_campanas.data] if res_campanas.data else []
                         
-                        col_id_planta = [c for c in muestra_planta.keys() if "id" in c.lower()][0]
-                        col_id_vivero = [c for c in muestra_vivero.keys() if "id" in c.lower()][0]
+                        # 3. Encontrar el primer lote "Fresco" (que no esté en la lista de procesados)
+                        item = None
+                        for lote in res_inv.data:
+                            if lote["inventario_id"] not in lotes_procesados:
+                                item = lote
+                                break
                         
-                        planta_data = supabase.table("plantas").select("*").eq(col_id_planta, item["planta_id"]).execute().data[0]
-                        vivero_data = supabase.table("viveros").select("*").eq(col_id_vivero, item["vivero_id"]).execute().data[0]
-                        
-                        # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
-                        cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
-                        nombre_especie = planta_data[cols_nombre_planta[0]] if cols_nombre_planta else f"Planta_ID_{item['planta_id']}"
-                        
-                        # ESCÁNER DINÁMICO DE NOMBRES PARA VIVERO
-                        cols_nombre_vivero = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
-                        nombre_vivero = vivero_data[cols_nombre_vivero[0]] if cols_nombre_vivero else f"Vivero_ID_{item['vivero_id']}"
-                        
-                        locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
-                        
-                        st.session_state.c360_lote = {
-                            "especie": nombre_especie, "cantidad": item["stock"], 
-                            "ubicacion": locacion, "vendedor": nombre_vivero
-                        }
-                        
-                        # Guardamos los resultados de los agentes en el estado de la sesión
-                        st.session_state.c360_seo = generar_seo_desde_inventario(st.session_state.c360_lote)
-                        st.session_state.c360_wa = generar_campana_whatsapp(f"Vender lote urgente de {item['stock']} {nombre_especie} en {locacion}.")
-                        st.session_state.c360_video = redactar_guion_viral(f"Carga logística y revisión de calidad de {item['stock']} {nombre_especie} en {locacion}.")
-                        st.session_state.c360_lista = True
+                        # 4. Candado de seguridad
+                        if not item:
+                            st.info("Tranquilo, todos los lotes de alto volumen actuales ya tienen campañas activas. Espera a que ingrese nuevo inventario.")
+                        else:
+                            # --- INICIA EXTRACCIÓN DE DATOS PARA EL LOTE FRESCO ---
+                            muestra_planta = supabase.table("plantas").select("*").limit(1).execute().data[0]
+                            muestra_vivero = supabase.table("viveros").select("*").limit(1).execute().data[0]
+                            
+                            col_id_planta = [c for c in muestra_planta.keys() if "id" in c.lower()][0]
+                            col_id_vivero = [c for c in muestra_vivero.keys() if "id" in c.lower()][0]
+                            
+                            planta_data = supabase.table("plantas").select("*").eq(col_id_planta, item["planta_id"]).execute().data[0]
+                            vivero_data = supabase.table("viveros").select("*").eq(col_id_vivero, item["vivero_id"]).execute().data[0]
+                            
+                            # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
+                            cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
+                            nombre_especie = planta_data[cols_nombre_planta[0]] if cols_nombre_planta else f"Planta_ID_{item['planta_id']}"
+                            
+                            # ESCÁNER DINÁMICO DE NOMBRES PARA VIVERO
+                            cols_nombre_vivero = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
+                            nombre_vivero = vivero_data[cols_nombre_vivero[0]] if cols_nombre_vivero else f"Vivero_ID_{item['vivero_id']}"
+                            
+                            locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
+                            
+                            st.session_state.c360_lote = {
+                                "especie": nombre_especie, "cantidad": item["stock"], 
+                                "ubicacion": locacion, "vendedor": nombre_vivero
+                            }
+                            
+                            # 5. EJECUTAR AGENTES CON EL LOTE FRESCO
+                            st.session_state.c360_seo = generar_seo_desde_inventario(st.session_state.c360_lote)
+                            st.session_state.c360_wa = generar_campana_whatsapp(f"Vender lote urgente de {item['stock']} {nombre_especie} en {locacion}.")
+                            st.session_state.c360_video = redactar_guion_viral(f"Carga logística y revisión de calidad de {item['stock']} {nombre_especie} en {locacion}.")
+                            
+                            # 6. REGISTRAR ÉXITO EN LA BASE DE DATOS (Cierra el candado)
+                            supabase.table("campanas_ejecutadas").insert({"inventario_id": item["inventario_id"]}).execute()
+                            
+                            st.session_state.c360_lista = True
                         
                 except Exception as e:
                     st.error(f"Error en la orquestación: {e}")
-
     # Renderizado fuera del botón principal usando persistencia
     if st.session_state.get("c360_lista"):
         lote = st.session_state.c360_lote
