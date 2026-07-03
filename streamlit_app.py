@@ -84,3 +84,28 @@ with tab_360:
     if st.session_state.get("c360_lista"):
         # ... (Tu lógica de visualización de resultados en expanders) ...
         pass
+# --- PESTAÑA 6: HISTORIAL (Memoria del Negocio) ---
+with tab_historial:
+    st.subheader("📜 Historial de Contenido")
+    
+    # 1. Traer datos
+    res_historial = supabase.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
+    
+    if res_historial.data:
+        # Filtros rápidos
+        col1, col2 = st.columns(2)
+        tipo_filtro = col1.multiselect("Filtrar por tipo:", ["SEO", "WHATSAPP", "VIDEO"])
+        busqueda = col2.text_input("Buscar en títulos:")
+        
+        datos = res_historial.data
+        if tipo_filtro: datos = [d for d in datos if d["tipo_contenido"] in tipo_filtro]
+        if busqueda: datos = [d for d in datos if busqueda.lower() in d["titulo"].lower()]
+        
+        # Mostrar tabla interactiva
+        for item in datos:
+            with st.expander(f"{item['tipo_contenido']} | {item['titulo']} ({item['fecha_creacion'][:10]})"):
+                st.markdown(item["contenido"])
+                if st.button(f"📋 Copiar al portapapeles", key=item["id"]):
+                    st.write("Copiado!") # Lógica de portapapeles simplificada
+    else:
+        st.info("Aún no hay contenido en el historial. ¡Lanza una Campaña 360!")
