@@ -186,19 +186,13 @@ with tab_seo:
                             planta_data = supabase.table("plantas").select("*").eq(col_id_planta, item["planta_id"]).execute().data[0]
                             vivero_data = supabase.table("viveros").select("*").eq(col_id_vivero, item["vivero_id"]).execute().data[0]
                             
-                            nombre_especie = (
-                                planta_data.get("especie_nombre") or 
-                                planta_data.get("nombre_comun") or 
-                                planta_data.get("nombre") or 
-                                f"Especie ID {item['planta_id']}"
-                            )
+                            # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
+                            cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
+                            nombre_especie = planta_data[cols_nombre_planta[0]] if cols_nombre_planta else f"Planta_ID_{item['planta_id']}"
                             
-                            nombre_vivero = (
-                                vivero_data.get("vendedor_nombre") or 
-                                vivero_data.get("nombre_vivero") or 
-                                vivero_data.get("nombre") or 
-                                f"Vivero ID {item['vivero_id']}"
-                            )
+                            # ESCÁNER DINÁMICO DE NOMBRES PARA VIVERO
+                            cols_nombre_vivero = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
+                            nombre_vivero = vivero_data[cols_nombre_vivero[0]] if cols_nombre_vivero else f"Vivero_ID_{item['vivero_id']}"
                             
                             locacion = (
                                 vivero_data.get("ubicacion") or 
@@ -280,8 +274,14 @@ with tab_360:
                         planta_data = supabase.table("plantas").select("*").eq(col_id_planta, item["planta_id"]).execute().data[0]
                         vivero_data = supabase.table("viveros").select("*").eq(col_id_vivero, item["vivero_id"]).execute().data[0]
                         
-                        nombre_especie = planta_data.get("especie_nombre") or planta_data.get("nombre") or f"Especie ID {item['planta_id']}"
-                        nombre_vivero = vivero_data.get("vendedor_nombre") or vivero_data.get("nombre") or f"Vivero ID {item['vivero_id']}"
+                        # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
+                        cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
+                        nombre_especie = planta_data[cols_nombre_planta[0]] if cols_nombre_planta else f"Planta_ID_{item['planta_id']}"
+                        
+                        # ESCÁNER DINÁMICO DE NOMBRES PARA VIVERO
+                        cols_nombre_vivero = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
+                        nombre_vivero = vivero_data[cols_nombre_vivero[0]] if cols_nombre_vivero else f"Vivero_ID_{item['vivero_id']}"
+                        
                         locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
                         
                         st.session_state.c360_lote = {
