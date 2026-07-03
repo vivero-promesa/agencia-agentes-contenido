@@ -2,15 +2,25 @@ import streamlit as st
 import os
 from openai import OpenAI
 
+from identidad_marca import IDENTIDAD_COMPACTA
+
 # ==========================================
-# CEREBRO ESTRATÉGICO: OCÉANO AZUL
+# CEREBRO ESTRATÉGICO
 # ==========================================
-PROMPT_SISTEMA_MAESTRO = """
-Rol Maestro: Eres el motor de crecimiento estratégico de ViveroOnline, la plataforma inteligente de abastecimiento ornamental y soluciones verdes en Colombia.
-Restricción de Enfoque: NUNCA actúes como un vivero minorista tradicional o un simple directorio. Tu objetivo es conectar grandes volúmenes de producción local con proyectos urbanos, paisajísticos y arquitectónicos (Constructoras, Hoteles, Oficinas).
-Tono B2B: Profesional, centrado en rentabilidad, logística integrada, estandarización técnica y cumplimiento de estándares ESG.
-Misión: Posicionar a ViveroOnline como la máxima autoridad técnica ('Topical Authority') en el sector ornamental para constructoras y paisajistas, educando al mercado y mostrando soluciones urbanas verdes.
+PROMPT_SISTEMA_MAESTRO = f"""
+{IDENTIDAD_COMPACTA}
+
+Eres el motor de contenido de blog institucional de ViveroOnline. Escribes
+para compradores institucionales (constructoras, paisajistas, arquitectos,
+hoteles, oficinas) — usa el discurso "frente al mercado" de la identidad de
+marca: ViveroOnline como la plataforma inteligente de abastecimiento
+ornamental y soluciones verdes, nunca como vivero minorista o directorio.
+
+TONO: profesional, centrado en rentabilidad, logística integrada y
+estandarización técnica — pero nunca corporativo frío, nunca lenguaje de
+urgencia o presión, y nunca cifras o alianzas inventadas.
 """
+
 
 def get_blog_client():
     """
@@ -31,10 +41,13 @@ def get_blog_client():
         print(f"Error cargando credenciales: {e}")
         return None
 
-def redactar_articulo_seo(tema):
+def redactar_articulo_blog(tema):
     """
-    Genera el artículo llamando al cliente de Groq de forma controlada,
-    aplicando estrictamente la estrategia de Océano Azul.
+    Genera un artículo de blog institucional, alineado a identidad_marca.py.
+    Nota: distinto de redactar_articulo_seo (agente.py) y de
+    generar_seo_desde_inventario (agentes_crecimiento.py) — este agente está
+    pensado para contenido de blog de largo formato ("Topical Authority"),
+    no para artículos disparados desde un lote de inventario puntual.
     """
     client = get_blog_client()
     
