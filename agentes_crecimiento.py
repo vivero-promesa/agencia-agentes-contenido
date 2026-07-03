@@ -6,20 +6,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Inicialización segura
+# Inicialización segura del cliente Gemini
 client_ai = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+# ==========================================
+# ESQUEMAS DE DATOS (PYDANTIC)
+# ==========================================
 class CampanaWhatsApp(BaseModel):
-    mensaje_texto: str = Field(description="Texto ultra corto, persuasivo, con emojis.")
-    guion_nota_voz: str = Field(description="Guion conversacional muy natural.")
+    mensaje_texto: str = Field(description="Texto ultra corto, persuasivo, con emojis para la pantalla de bloqueo.")
+    guion_nota_voz: str = Field(description="Guion conversacional muy natural con pausas y respiraciones.")
     link_wa: str = Field(description="URL formato wa.me/numero?text=mensaje")
 
 class ArticuloSEO(BaseModel):
-    titulo_h1: str = Field(description="Título SEO atractivo para B2B.")
+    titulo_h1: str = Field(description="Título SEO atractivo y transaccional para B2B.")
     slug: str = Field(description="URL amigable.")
-    meta_description: str = Field(description="Meta descripción.")
-    contenido_md: str = Field(description="Contenido completo en Markdown.")
+    meta_description: str = Field(description="Meta descripción orientada a conversión.")
+    contenido_md: str = Field(description="Contenido completo en Markdown impecable.")
 
+# ==========================================
+# MOTOR DE INVOCACIÓN SEGURO
+# ==========================================
 def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
     modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
     for modelo in modelos:
@@ -38,11 +44,41 @@ def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
             print(f"Error en {modelo}: {e}")
     return None
 
+# ==========================================
+# AGENTE 1: WHATSAPP B2B (Fricción Cero)
+# ==========================================
 def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000"):
-    prompt = f"Campaña para ViveroOnline. Objetivo: {objetivo}. Audiencia: Viveristas Sabana Bogotá."
-    json_res = invocar_modelo_seguro(prompt, CampanaWhatsApp, 0.7)
+    prompt_wa = f"""
+    Eres el Director de Ventas B2B de ViveroOnline, una plataforma AgTech que conecta viveros de la Sabana de Bogotá con constructoras y paisajistas.
+    
+    OBJETIVO DE LA CAMPAÑA: {objetivo}
+    
+    INSTRUCCIONES PARA EL MENSAJE DE TEXTO (mensaje_texto):
+    - Debe ser ultra corto (máximo 3-4 líneas), diseñado para leerse en la pantalla de bloqueo.
+    - Estructura: Gancho logístico + Valor + Pregunta de fricción cero (ej. "¿Te envío el catálogo o prefieres que hablemos?").
+    - Tono: Profesional pero directo. Usa máximo 2 emojis (🚚, 🌱, 🏢, 📈).
+    - Cero saludos acartonados como "Estimado señor".
+    
+    INSTRUCCIONES PARA LA NOTA DE VOZ (guion_nota_voz - Para ElevenLabs):
+    - Debe sonar 100% natural, como un humano enviando un audio rápido mientras revisa un invernadero.
+    - Longitud: MÁXIMO 60 palabras (para que dure unos 35 segundos). Los jefes de obra no escuchan audios largos.
+    - Acústica y Ritmo: Usa comas y puntos suspensivos (...) para forzar a la IA de ElevenLabs a respirar y hacer pausas naturales.
+    - Tono: Seguro, consultivo. Arranca con un saludo natural ("Hola, qué tal, te hablo desde ViveroOnline...").
+    - Ve directo al grano: qué volumen manejamos, cómo le resolvemos la logística y cierra con una instrucción clara.
+    
+    URL DE WHATSAPP (link_wa): 
+    - Genera un link formato wa.me/{numero}?text=Hola%20quiero%20info
+    
+    Genera EXCLUSIVAMENTE el JSON solicitado.
+    """
+    
+    # Temperatura 0.5: balance entre estructura comercial y naturalidad conversacional
+    json_res = invocar_modelo_seguro(prompt_wa, CampanaWhatsApp, 0.5)
     return CampanaWhatsApp.model_validate_json(json_res) if json_res else None
 
+# ==========================================
+# AGENTE 2: SEO TRANSACCIONAL DINÁMICO
+# ==========================================
 def generar_seo_desde_inventario(datos: dict):
     prompt_b2b = f"""
     Eres un Estratega SEO y Copywriter B2B experto en el sector agrónomo y de construcción en Colombia.
@@ -68,6 +104,6 @@ def generar_seo_desde_inventario(datos: dict):
     - Tono: Consultivo, corporativo, directo al grano. Cero lenguaje romántico sobre la naturaleza; háblales de rentabilidad y eficiencia logística.
     """
     
-    # Invocamos al modelo con una temperatura baja (0.3) para priorizar estructura y precisión sobre creatividad excesiva
+    # Temperatura 0.3: prioriza estructura y precisión B2B
     json_res = invocar_modelo_seguro(prompt_b2b, ArticuloSEO, 0.3)
     return ArticuloSEO.model_validate_json(json_res) if json_res else None
