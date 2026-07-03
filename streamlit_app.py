@@ -122,20 +122,20 @@ with tab_video:
 
         plantilla_json = '''{
     "escena_1": {
-        "nombre": "Intro Logística",
+        "nombre": "Inicio de Jornada",
         "tipo": "IA_GENERATIVE",
-        "visual": "Camión de carga recibiendo estibas llenas de plantas sanas",
-        "emocion": "Eficiencia y escala industrial",
-        "camara": "Plano general, movimiento de dron lento hacia adelante",
-        "texto": "Capacidad logística en toda la Sabana"
+        "visual": "Viverista revisando sus plantas temprano en la mañana, hojas húmedas de riego",
+        "emocion": "Cercana, tranquila, orgullo por el oficio",
+        "camara": "Plano general, movimiento suave hacia adelante",
+        "texto": "Cada planta, revisada a mano"
     },
     "escena_2": {
         "nombre": "Detalle de Calidad",
         "tipo": "IA_GENERATIVE",
-        "visual": "Manos con guantes inspeccionando raíces blancas y sustrato premium",
-        "emocion": "Confianza y calidad técnica",
-        "camara": "Plano detalle (Macro), enfoque nítido",
-        "texto": "Cero mortalidad en obra"
+        "visual": "Manos con tierra inspeccionando raíces blancas y sustrato",
+        "emocion": "Confianza y conocimiento del oficio",
+        "camara": "Plano detalle (macro), enfoque nítido",
+        "texto": "Años de experiencia en cada raíz"
     }
 }'''
         storyboard_input = st.text_area("Storyboard (Formato JSON):", value=plantilla_json, height=250)
