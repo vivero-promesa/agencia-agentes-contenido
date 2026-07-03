@@ -4,22 +4,24 @@ import edge_tts
 import io
 
 def generar_audio_elevenlabs(texto_guion: str) -> bytes | None:
-    # 1. Limpieza estratégica
+    # 1. Limpieza de texto
     texto_limpio = re.sub(r'\[.*?\]|\*|---.*?---', '', texto_guion).strip()
     
     if not texto_limpio:
         return None
 
-    # Voz masculina colombiana con tono de autoridad y cercanía
+    # Gonzalo es nuestra mejor voz para cerrar negocios
     VOICE = "es-CO-GonzaloNeural"
     
     async def generar():
-        # Tono persuasivo pero pausado y natural
+        # Ajuste Pro:
+        # rate="+15%": Velocidad ideal para que el receptor sienta urgencia pero no pierda detalle.
+        # pitch="+0Hz": Mantener el tono natural pero firme.
         communicate = edge_tts.Communicate(
             texto_limpio, 
             VOICE, 
-            rate="+0%",  # Ritmo de conversación natural
-            pitch="-2Hz" # Un tono ligeramente más grave para dar más autoridad de "viverista"
+            rate="+15%", 
+            pitch="+0Hz"
         )
         
         audio_data = io.BytesIO()
@@ -31,5 +33,5 @@ def generar_audio_elevenlabs(texto_guion: str) -> bytes | None:
     try:
         return asyncio.run(generar())
     except Exception as e:
-        print(f"Error en motor de voz masculina: {e}")
+        print(f"Error en motor de voz rápida: {e}")
         return None
