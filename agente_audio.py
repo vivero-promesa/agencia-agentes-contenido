@@ -1,38 +1,89 @@
-import asyncio
-import re
-import edge_tts
-import io
+import streamlit as st
+from google import genai
+import json
 
-def generar_audio_elevenlabs(texto_guion: str) -> bytes | None:
-    # 1. Limpieza de texto
-    texto_limpio = re.sub(r'\[.*?\]|\*|---.*?---', '', texto_guion).strip()
-    
-    if not texto_limpio:
+from brand_book import GUIA_VISUAL_VIDEO
+
+
+def get_video_client():
+    """Inicializa de forma segura el cliente oficial de Google GenAI."""
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        return genai.Client(api_key=api_key)
+    except Exception as e:
+        st.error(f"Error de configuración en las llaves de Google AI: {e}")
         return None
 
-    # Gonzalo es nuestra mejor voz para cerrar negocios
-    VOICE = "es-CO-GonzaloNeural"
-    
-    async def generar():
-        # Ajuste alineado al ADN emocional de marca (Brand Book): la voz debe
-        # transmitir confianza y cercanía, nunca presión ni urgencia.
-        # rate="+5%": ligeramente más ágil que el ritmo neutro, sin sonar apurado.
-        # pitch="+0Hz": tono natural, firme.
-        communicate = edge_tts.Communicate(
-            texto_limpio, 
-            VOICE, 
-            rate="+5%", 
-            pitch="+0Hz"
-        )
-        
-        audio_data = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.write(chunk["data"])
-        return audio_data.getvalue()
+
+def optimizar_prompt_produccion(escena_data):
+    """
+    Agente Productor: Toma la definición humana de la escena y la traduce
+    a un prompt de ingeniería visual para Veo 3.1, anclado al Brand Book
+    real de ViveroOnline (vivero familiar de la Sabana de Bogotá), no a
+    una estética genérica de bodega industrial.
+    """
+    prompt_base = (
+        f"Sujeto principal y acción: {escena_data.get('visual', 'trabajo diario en el vivero')}. "
+        f"Atmósfera: {escena_data.get('emocion', 'cercana, tranquila, auténtica')}. "
+        f"Cámara: {escena_data.get('camara', 'plano medio, movimiento suave de estabilizador')}. "
+        f"{GUIA_VISUAL_VIDEO.strip()} "
+        f"Regla estricta: NO incluir texto en el video. Dejar tercio inferior despejado para subtítulos."
+    )
+    return prompt_base
+
+
+def generar_video_escena(id_escena, prompt_tecnico):
+    """Llama a la API de Google Veo 3.1 para generar el B-Roll."""
+    client = get_video_client()
+    if not client:
+        return None
 
     try:
-        return asyncio.run(generar())
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=prompt_tecnico,
+            config={
+                "aspect_ratio": "9:16",
+                "duration_seconds": 5  # Control de ritmo para redes sociales
+            }
+        )
+
+        # Extracción segura de la URI del video
+        if hasattr(operation, 'generated_videos') and operation.generated_videos:
+            return operation.generated_videos[0].video.uri
+        return getattr(operation, 'output', None)
+
     except Exception as e:
-        print(f"Error en motor de voz rápida: {e}")
+        st.error(f"Error generando render para la escena {id_escena}: {e}")
         return None
+
+
+def ejecutar_pipeline_agencia(storyboard_json):
+    """
+    Orquestador de la Agencia: Procesa todo el comercial secuencialmente.
+    """
+    try:
+        storyboard = json.loads(storyboard_json)
+    except json.JSONDecodeError:
+        st.error("El formato del storyboard no es un JSON válido.")
+        return {}
+
+    resultados = {}
+
+    for clave, escena in storyboard.items():
+        st.write(f"🎬 **Renderizando: {escena.get('nombre', clave)}**")
+
+        if escena.get("tipo") == "IA_GENERATIVE":
+            prompt_listo = optimizar_prompt_produccion(escena)
+            st.caption(f"🤖 *Prompt enviado a Veo 3.1:* {prompt_listo}")
+
+            url_video = generar_video_escena(clave, prompt_listo)
+            resultados[clave] = {"status": "Listo", "url": url_video, "texto": escena.get("texto", "")}
+
+        elif escena.get("tipo") == "UI_RECORDING":
+            st.info(f"📱 *Nota:* Esta escena requiere grabación de pantalla de app.viveroonline.com.co.")
+            resultados[clave] = {"status": "Requiere_Media_Local", "texto": escena.get("texto", "")}
+
+    return resultados
