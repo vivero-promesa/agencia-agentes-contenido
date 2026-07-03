@@ -337,20 +337,24 @@ with tab_360:
 # --- PESTAÑA 6: HISTORIAL ---
 # ==========================================
 with tab_historial:
-    st.subheader("📜 Historial de Contenido Generado")
+    st.subheader("📜 Historial de Contenido")
     if not supabase:
-        st.error("Error de conexión Supabase.")
+        st.error("No hay conexión con Supabase.")
     else:
         try:
+            # Intentamos obtener los datos
             res = supabase.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
+            
             if not res.data:
-                st.info("Aún no hay contenido en el historial. Lanza una Campaña 360 para empezar.")
+                st.info("Aún no hay contenido en el historial.")
             else:
                 for item in res.data:
-                    with st.expander(f"{item['tipo_contenido']} | {item['titulo']}"):
-                        st.markdown(item['contenido'])
-        except Exception:
-            st.warning("Historial inaccesible (Revisa políticas RLS de la tabla historial_contenidos).")
+                    with st.expander(f"{item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')}"):
+                        st.markdown(item.get('contenido', ''))
+                        
+        except Exception as e:
+            # ESTA LÍNEA TE DIRÁ EXACTAMENTE QUÉ ESTÁ PASANDO
+            st.error(f"❌ Error técnico real: {e}")
 
 # ==========================================
 # --- PESTAÑA 7: COMPETENCIA ---
