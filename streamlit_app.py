@@ -13,6 +13,9 @@ from agente_blog import redactar_articulo_seo
 # Importación de los nuevos agentes estructurados
 from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario
 
+# Importación del nuevo motor de audio (ElevenLabs)
+from agente_audio import generar_audio_elevenlabs
+
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA (Debe ir primero)
 # ==========================================
@@ -58,7 +61,7 @@ if "video_url_actual" not in st.session_state: st.session_state.video_url_actual
 if "prompt_video_procesado" not in st.session_state: st.session_state.prompt_video_procesado = None
 
 # ==========================================
-# 4. ARQUITECTURA DE PESTAÑAS (Actualizada con Fases 1, 2 y 3)
+# 4. ARQUITECTURA DE PESTAÑAS (Fases 1, 2 y 3)
 # ==========================================
 tab_texto, tab_whatsapp, tab_video, tab_seo = st.tabs([
     "📝 Textos y Guiones", 
@@ -67,7 +70,7 @@ tab_texto, tab_whatsapp, tab_video, tab_seo = st.tabs([
     "🚀 SEO Programático"
 ])
 
-# --- PESTAÑA 1: TEXTOS (Mantenemos original) ---
+# --- PESTAÑA 1: TEXTOS ---
 with tab_texto:
     st.subheader("Creador de Contenido Escrito (Ventas & SEO)")
     
@@ -115,7 +118,7 @@ with tab_texto:
                 st.session_state.contenido_actual = None
                 st.rerun()
 
-# --- NUEVA PESTAÑA: CAMPAÑAS WHATSAPP (Fase 1) ---
+# --- PESTAÑA 2: CAMPAÑAS WHATSAPP (Fase 1 + ElevenLabs) ---
 with tab_whatsapp:
     st.subheader("Captación Directa (Fricción Cero)")
     st.write("Genera copys cortos y notas de voz para compartir directamente en grupos de viveristas.")
@@ -138,13 +141,30 @@ with tab_whatsapp:
                         with col2:
                             st.markdown("### 🎙️ Guion para Nota de Voz")
                             st.success(campana.guion_nota_voz)
-                            st.caption("Próximo paso: Conectar este guion a la API de ElevenLabs para generar el .mp3 automáticamente.")
+                            
+                            # --- INTEGRACIÓN ELEVENLABS ---
+                            if st.button("🎧 Generar Nota de Voz (ElevenLabs)", type="secondary"):
+                                with st.spinner("Sintetizando voz colombiana..."):
+                                    audio_bytes = generar_audio_elevenlabs(campana.guion_nota_voz)
+                                    
+                                    if audio_bytes:
+                                        # Reproductor integrado en Streamlit
+                                        st.audio(audio_bytes, format="audio/mp3")
+                                        
+                                        # Botón de descarga directa
+                                        st.download_button(
+                                            label="📥 Descargar .mp3 para WhatsApp",
+                                            data=audio_bytes,
+                                            file_name="nota_voz_viveroonline.mp3",
+                                            mime="audio/mp3",
+                                            type="primary"
+                                        )
                 except Exception as e:
-                     st.error(f"Error generando campaña: Asegúrate de tener creado el archivo agentes_crecimiento.py. Detalle: {e}")
+                     st.error(f"Error generando campaña: Asegúrate de tener creado el archivo agentes_crecimiento.py y agente_audio.py. Detalle: {e}")
         else:
              st.warning("Debes ingresar un objetivo para la campaña.")
 
-# --- PESTAÑA 2: VIDEO (VEO 3) CON KIT DE EDICIÓN (Fase 2) ---
+# --- PESTAÑA 3: VIDEO (VEO 3) CON KIT DE EDICIÓN (Fase 2) ---
 with tab_video:
     st.subheader("Agente Productor: B-Roll para Redes (Costo Cero)")
     st.write("Genera fondos cinematográficos optimizados para retención móvil.")
@@ -241,7 +261,6 @@ with tab_video:
         
         col_v1, col_v2, col_v3 = st.columns(3)
         with col_v1:
-            # En un entorno real, descargarías el archivo. Por ahora simulamos el botón.
             st.button("📥 1. Descargar B-Roll (.mp4)", help="Clip crudo de Veo 3")
         with col_v2:
             st.button("📥 2. Descargar Locución (.mp3)", help="Audio generado de tu guion")
@@ -254,7 +273,7 @@ with tab_video:
             st.session_state.video_url_actual = None
             st.rerun()
 
-# --- NUEVA PESTAÑA: SEO PROGRAMÁTICO (Fase 3) ---
+# --- PESTAÑA 4: SEO PROGRAMÁTICO (Fase 3) ---
 with tab_seo:
     st.subheader("Crecimiento Impulsado por Oferta")
     st.write("Simulación del Trigger: Detecta automáticamente nuevos ingresos masivos de inventario y genera artículos para captar demanda.")
@@ -286,6 +305,3 @@ with tab_seo:
                         st.toast("El artículo ha sido inyectado en la base de datos de producción.")
             except Exception as e:
                 st.error(f"Error en el agente SEO: Asegúrate de tener creado el archivo agentes_crecimiento.py. Detalle: {e}")
-
-# Importación del motor de audio (Añade esta línea junto a tus otros imports)
-from agente_audio import generar_audio_elevenlabs
