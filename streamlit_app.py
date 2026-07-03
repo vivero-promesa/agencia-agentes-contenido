@@ -103,7 +103,15 @@ with tab_seo:
     
     modo_seo = st.radio("Modo de operación:", ["📡 Automatizado (Base de Datos)", "✍️ Ingreso Manual"], horizontal=True)
     
-    if modo_seo == "📡 Automatizado (Base de Datos)":
+   # 1. Obtener el último registro del inventario (Blindaje B2B)
+# Filtramos para que solo tome plantas 'disponibles' y con stock mayor a 20
+res_inv = supabase.table("inventario") \
+    .select("*") \
+    .eq("estado_planta", "disponible") \
+    .gte("stock", 20) \
+    .order("inventario_id", desc=True) \
+    .limit(1) \
+    .execute()
         if st.button("Analizar BD y Generar SEO"):
             if not supabase:
                 st.error("Falta configurar la conexión a Supabase en los Secrets.")
