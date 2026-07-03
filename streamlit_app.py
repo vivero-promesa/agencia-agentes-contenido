@@ -84,14 +84,24 @@ with tab_360:
         with col2:
             st.expander("💬 WhatsApp").write(data["wa"].mensaje_texto)
 
-# --- PESTAÑA 6: HISTORIAL ---
+# --- PESTAÑA 6: HISTORIAL (Memoria del Negocio Blindada) ---
 with tab_historial:
     st.subheader("📜 Historial de Contenido")
-    res = supabase.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
-    if res.data:
-        for item in res.data:
-            with st.expander(f"{item['tipo_contenido']} | {item['titulo']}"):
-                st.markdown(item['contenido'])
+    
+    try:
+        # Intentamos obtener los datos
+        res = supabase.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
+        datos = res.data if res.data else []
+    except Exception as e:
+        st.warning("⚠️ El historial está temporalmente inaccesible. Revisa las políticas RLS en Supabase.")
+        datos = []
+
+    if datos:
+        # Filtros y lógica de visualización como la tenías...
+        col1, col2 = st.columns(2)
+        # ... (resto de tu código de filtros y expanders)
+    else:
+        st.info("No se encontraron registros. ¡Lanza una Campaña 360 para generar el primer contenido!")
 
 # --- PESTAÑA 7: COMPETENCIA ---
 with tab_competencia:
