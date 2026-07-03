@@ -40,9 +40,9 @@ def generar_campana_whatsapp(objetivo: str, numero_contacto: str = "573000000000
     Audiencia: Viveristas y constructores en la Sabana de Bogotá. Tono directo, confianza, cero tecnicismos.
     """
     
-    # El modelo responde obligatoriamente con el esquema Pydantic (Usando Flash para evitar errores de cuota)
+    # SOLUCIÓN: Usamos gemini-2.5-flash, alineado con la versión de API de tu proyecto
     response = client_ai.models.generate_content(
-        model='gemini-1.5-flash',
+        model='gemini-2.5-flash',
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
@@ -72,9 +72,9 @@ def generar_seo_desde_inventario(datos_inventario: dict) -> ArticuloSEO | None:
     Incluye un llamado a la acción claro para comprar este lote específico en ViveroOnline.
     """
     
-    # Usando Flash para procesar datos rápidos sin afectar cuota de modelos Pro
+    # SOLUCIÓN: Usamos gemini-2.5-flash
     response = client_ai.models.generate_content(
-        model='gemini-1.5-flash',
+        model='gemini-2.5-flash',
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
