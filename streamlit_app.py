@@ -51,76 +51,64 @@ with tab_whatsapp:
                 else:
                     st.warning("No se pudo generar el audio.")
 
-# --- PESTAÑA SEO PROGRAMÁTICO (CORREGIDA CON DIAGNÓSTICO) ---
+# --- PESTAÑA SEO PROGRAMÁTICO (Estructura Definitiva) ---
 with tab_seo:
     st.subheader("Trigger SEO: Generador de Artículos B2B")
     
-    modo_seo = st.radio("Modo:", ["📡 Conexión a Base de Datos", "✍️ Ingreso Manual"], horizontal=True)
+    # 1. Selector de modo
+    modo_seo = st.radio("Modo de operación:", ["📡 Diagnóstico/Automático", "✍️ Ingreso Manual"], horizontal=True)
     
-    if modo_seo == "📡 Conexión a Base de Datos":
-        if st.button("Ejecutar Trigger Automático"):
-            with st.spinner("Consultando esquema y datos..."):
+    if modo_seo == "📡 Diagnóstico/Automático":
+        # Botón para ejecutar el diagnóstico que te dará las llaves correctas
+        if st.button("Analizar BD y Generar SEO"):
+            with st.spinner("Analizando esquema y generando artículo..."):
                 try:
-                    # 1. Obtener registro de inventario
-                    res = supabase.table("inventario").select("*").order("inventario_id", desc=True).limit(1).execute()
-                    item = res.data[0]
+                    # Obtenemos registro de inventario
+                    item = supabase.table("inventario").select("*").limit(1).execute().data[0]
                     
-                    # 2. INTENTO DE CONSULTA (Con manejo de error informativo)
-                    # Primero intentamos obtener las tablas.
-                    # Si falla, el bloque except nos dirá qué columnas existen realmente.
+                    # Obtenemos la estructura real de las tablas relacionadas
+                    planta_data = supabase.table("plantas").select("*").eq("id", item["planta_id"]).execute().data[0]
+                    vivero_data = supabase.table("viveros").select("*").eq("id", item["vivero_id"]).execute().data[0]
                     
-                    # AQUÍ ESTÁ EL CAMBIO:
-                    # Vamos a pedirle a Supabase que nos de cualquier columna de plantas para ver el nombre real
-                    planta_res = supabase.table("plantas").select("*").eq("id", item["planta_id"]).limit(1).execute()
-                    vivero_res = supabase.table("viveros").select("*").eq("id", item["vivero_id"]).limit(1).execute()
+                    # --- AQUÍ MOSTRAREMOS LOS NOMBRES REALES PARA QUE LOS VEAS ---
+                    st.write("Columnas detectadas:", list(planta_data.keys()))
                     
-                    # Si llega aquí, significa que las tablas existen. 
-                    # Ahora extraeremos las llaves (nombres de columna) reales:
-                    cols_planta = list(planta_res.data[0].keys()) if planta_res.data else []
-                    cols_vivero = list(vivero_res.data[0].keys()) if vivero_res.data else []
+                    # --- CONFIGURA ESTOS NOMBRES SEGÚN LO QUE SALGA ARRIBA ---
+                    # Una vez sepas los nombres, solo cambia los strings de abajo:
+                    nombre_especie = planta_data.get("nombre", planta_data.get("especie_nombre", "Planta"))
+                    nombre_vivero = vivero_data.get("nombre", vivero_data.get("vendedor_nombre", "Vivero"))
+                    locacion = vivero_data.get("ubicacion", "Sabana de Bogotá")
                     
-                    st.write(f"Columnas detectadas en 'plantas': {cols_planta}")
-                    st.write(f"Columnas detectadas en 'viveros': {cols_vivero}")
-                    
-                    # AHORA, reemplaza los nombres abajo por los que aparecieron en pantalla
-                    # Ejemplo: Si aparece 'nombre' en vez de 'especie_nombre', cambia el código aquí abajo:
-                    especie = planta_res.data[0].get('nombre', 'Desconocida') # <--- AJUSTA 'nombre'
-                    vendedor = vivero_res.data[0].get('nombre_vivero', 'Aliado') # <--- AJUSTA 'nombre_vivero'
-                    
-                    datos = {"especie": especie, "cantidad": item["stock"], "vendedor": vendedor, "ubicacion": "Bogotá"}
-                    articulo = generar_seo_desde_inventario(datos)
-                    st.markdown(articulo.contenido_md)
-
-                except Exception as e:
-                    st.error(f"Error técnico: {e}")
-                    st.info("💡 Tip: Mira arriba los nombres de las columnas detectadas y ajusta el código.")
-
-    else:
-        # MODO MANUAL: Por si la BD falla o necesitas crear un artículo para un vivero que aún no está en el sistema
-        col1, col2 = st.columns(2)
-        with col1:
-            man_especie = st.text_input("Especie de Planta:", placeholder="Ej: Eugenia")
-            man_vendedor = st.text_input("Vendedor / Vivero:", placeholder="Ej: Vivero El Edén")
-        with col2:
-            man_cantidad = st.number_input("Cantidad Disponible (Stock):", min_value=1, value=100)
-            man_ubicacion = st.text_input("Ubicación:", placeholder="Ej: Cajicá")
-            
-        if st.button("Ejecutar Trigger Manual"):
-            if man_especie and man_vendedor and man_ubicacion:
-                with st.spinner("Redactando artículo estratégico..."):
-                    datos_manuales = {
-                        "especie": man_especie,
-                        "cantidad": man_cantidad,
-                        "ubicacion": man_ubicacion,
-                        "vendedor": man_vendedor
+                    datos_auto = {
+                        "especie": nombre_especie,
+                        "cantidad": item["stock"],
+                        "ubicacion": locacion,
+                        "vendedor": nombre_vivero
                     }
-                    articulo = generar_seo_desde_inventario(datos_manuales)
                     
+                    articulo = generar_seo_desde_inventario(datos_auto)
                     if articulo:
-                        st.success("Artículo manual generado exitosamente.")
+                        st.success("¡Artículo generado con éxito!")
                         st.markdown(f"### {articulo.titulo_h1}")
                         st.markdown(articulo.contenido_md)
-                    else:
-                        st.error("Error al generar el contenido.")
-            else:
-                st.warning("Por favor, completa todos los campos para el modo manual.")
+                
+                except Exception as e:
+                    st.error(f"Error en la consulta automática: {e}")
+                    st.info("💡 Tip: Revisa los nombres de las columnas que aparecieron arriba y actualiza los campos '.get()' en el código.")
+
+    else:
+        # MODO MANUAL: Respaldo total
+        col1, col2 = st.columns(2)
+        with col1:
+            man_especie = st.text_input("Especie:", placeholder="Ej: Eugenia")
+            man_vendedor = st.text_input("Vendedor:", placeholder="Ej: Vivero El Edén")
+        with col2:
+            man_cantidad = st.number_input("Cantidad:", min_value=1, value=100)
+            man_ubicacion = st.text_input("Ubicación:", placeholder="Ej: Cajicá")
+            
+        if st.button("Generar Artículo Manual"):
+            datos_manuales = {"especie": man_especie, "cantidad": man_cantidad, "ubicacion": man_ubicacion, "vendedor": man_vendedor}
+            articulo = generar_seo_desde_inventario(datos_manuales)
+            if articulo:
+                st.markdown(f"### {articulo.titulo_h1}")
+                st.markdown(articulo.contenido_md)
