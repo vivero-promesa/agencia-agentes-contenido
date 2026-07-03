@@ -103,25 +103,25 @@ with tab_seo:
     
     modo_seo = st.radio("Modo de operación:", ["📡 Automatizado (Base de Datos)", "✍️ Ingreso Manual"], horizontal=True)
     
-   # 1. Obtener el último registro del inventario (Blindaje B2B)
-# Filtramos para que solo tome plantas 'disponibles' y con stock mayor a 20
-res_inv = supabase.table("inventario") \
-    .select("*") \
-    .eq("estado_planta", "disponible") \
-    .gte("stock", 20) \
-    .order("inventario_id", desc=True) \
-    .limit(1) \
-    .execute()
+    if modo_seo == "📡 Automatizado (Base de Datos)":
         if st.button("Analizar BD y Generar SEO"):
             if not supabase:
                 st.error("Falta configurar la conexión a Supabase en los Secrets.")
             else:
                 with st.spinner("Decodificando esquema de base de datos y generando contenido..."):
                     try:
-                        res_inv = supabase.table("inventario").select("*").order("inventario_id", desc=True).limit(1).execute()
+                        # 1. Obtener el último registro del inventario (Blindaje B2B)
+                        # Filtramos para que solo tome plantas 'disponibles' y con stock mayor o igual a 20
+                        res_inv = supabase.table("inventario") \
+                            .select("*") \
+                            .eq("estado_planta", "disponible") \
+                            .gte("stock", 20) \
+                            .order("inventario_id", desc=True) \
+                            .limit(1) \
+                            .execute()
                         
                         if not res_inv.data:
-                            st.warning("El inventario está vacío.")
+                            st.warning("No hay inventario 'disponible' con más de 20 unidades en este momento.")
                         else:
                             item = res_inv.data[0]
                             
