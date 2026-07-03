@@ -1,6 +1,7 @@
 import streamlit as st
 import os
-import time  # Importado para manejar las pausas de la cuota de API
+import time
+import json
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from google import genai
@@ -8,6 +9,9 @@ from google import genai
 # Importación de tus agentes existentes
 from agente import redactar_guion_viral
 from agente_blog import redactar_articulo_seo
+
+# Importación de los nuevos agentes estructurados
+from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario
 
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA (Debe ir primero)
@@ -54,15 +58,16 @@ if "video_url_actual" not in st.session_state: st.session_state.video_url_actual
 if "prompt_video_procesado" not in st.session_state: st.session_state.prompt_video_procesado = None
 
 # ==========================================
-# 4. ARQUITECTURA DE PESTAÑAS
+# 4. ARQUITECTURA DE PESTAÑAS (Actualizada con Fases 1, 2 y 3)
 # ==========================================
-tab_texto, tab_video, tab_vids = st.tabs([
+tab_texto, tab_whatsapp, tab_video, tab_seo = st.tabs([
     "📝 Textos y Guiones", 
-    "🎬 Generador de B-Roll (Veo 3)", 
-    "📑 Exportar a Google Vids"
+    "💬 Campañas WhatsApp", 
+    "🎬 Generador B-Roll (Veo 3)", 
+    "🚀 SEO Programático"
 ])
 
-# --- PESTAÑA 1: TEXTOS ---
+# --- PESTAÑA 1: TEXTOS (Mantenemos original) ---
 with tab_texto:
     st.subheader("Creador de Contenido Escrito (Ventas & SEO)")
     
@@ -110,7 +115,36 @@ with tab_texto:
                 st.session_state.contenido_actual = None
                 st.rerun()
 
-# --- PESTAÑA 2: VIDEO (VEO 3) ---
+# --- NUEVA PESTAÑA: CAMPAÑAS WHATSAPP (Fase 1) ---
+with tab_whatsapp:
+    st.subheader("Captación Directa (Fricción Cero)")
+    st.write("Genera copys cortos y notas de voz para compartir directamente en grupos de viveristas.")
+    
+    obj_wa = st.text_input("¿Qué quieres comunicar?", placeholder="Ej. Invitarlos a subir sus suculentas a la plataforma sin costo.")
+    tel_wa = st.text_input("Número de atención (formato internacional)", value="573000000000")
+    
+    if st.button("Generar Kit de WhatsApp", type="primary"):
+        if obj_wa:
+            with st.spinner("Creando copy y guion de audio..."):
+                try:
+                    campana = generar_campana_whatsapp(obj_wa, tel_wa)
+                    if campana:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("### 📱 Copy para Chat")
+                            st.info(campana.mensaje_texto)
+                            st.code(campana.link_wa, language="markdown")
+                        
+                        with col2:
+                            st.markdown("### 🎙️ Guion para Nota de Voz")
+                            st.success(campana.guion_nota_voz)
+                            st.caption("Próximo paso: Conectar este guion a la API de ElevenLabs para generar el .mp3 automáticamente.")
+                except Exception as e:
+                     st.error(f"Error generando campaña: Asegúrate de tener creado el archivo agentes_crecimiento.py. Detalle: {e}")
+        else:
+             st.warning("Debes ingresar un objetivo para la campaña.")
+
+# --- PESTAÑA 2: VIDEO (VEO 3) CON KIT DE EDICIÓN (Fase 2) ---
 with tab_video:
     st.subheader("Agente Productor: B-Roll para Redes (Costo Cero)")
     st.write("Genera fondos cinematográficos optimizados para retención móvil.")
@@ -118,7 +152,6 @@ with tab_video:
     if not client_ai:
         st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada.")
     
-    # Plantillas mejoradas con parámetros de agencia
     PLANTILLAS_ESTRATEGICAS = {
         "🌱 Atraer Constructoras y Paisajistas (B2B)": {
             "estilo": "Documental cinematográfico hiperrealista, grano fílmico sutil",
@@ -146,7 +179,6 @@ with tab_video:
         
     detalles_entorno = st.text_area("🌅 Entorno (Auto):", value=config_actual["entorno"])
 
-    # BOTÓN CON LÓGICA DE REINTENTOS INCORPORADA
     if st.button("Renderizar B-Roll con Veo 3", type="primary"):
         if especie_planta:
             prompt_final_veo = (
@@ -157,9 +189,9 @@ with tab_video:
             )
             st.session_state.prompt_video_procesado = prompt_final_veo
             
-            # Bucle de reintentos (Exponential Backoff)
+            # Lógica de reintentos (Exponential Backoff)
             max_reintentos = 3
-            tiempo_espera = 30 # Segundos iniciales
+            tiempo_espera = 30
             exito = False
             
             with st.spinner("Agente renderizando clip... 🎬"):
@@ -171,14 +203,13 @@ with tab_video:
                             config={"aspect_ratio": "9:16"}
                         )
                         
-                        # Si llega aquí, fue exitoso
                         if hasattr(operation, 'generated_videos') and operation.generated_videos:
                             st.session_state.video_url_actual = operation.generated_videos[0].video.uri
                         else:
                             st.session_state.video_url_actual = operation.output
                         
                         exito = True
-                        break # Salimos del bucle si fue exitoso
+                        break
                         
                     except Exception as e:
                         error_str = str(e)
@@ -186,50 +217,72 @@ with tab_video:
                             if intento < max_reintentos - 1:
                                 st.toast(f"⏳ Cuota alcanzada. El agente esperará {tiempo_espera} segundos y reintentará (Intento {intento + 1}/{max_reintentos})...")
                                 time.sleep(tiempo_espera)
-                                tiempo_espera *= 2 # Duplicamos el tiempo de espera (30s, 60s...)
+                                tiempo_espera *= 2
                             else:
                                 st.error("❌ Límite de cuota persistente. Intenta de nuevo en 1 hora.")
                         else:
                             st.error(f"Fallo crítico en Veo 3: {e}")
-                            break # Si es un error distinto a cuota, no reintentamos
+                            break
                 
                 if exito:
                     st.success("¡Clip renderizado! Listo para tus redes.")
-
         else:
             st.warning("⚠️ Ingresa un protagonista (ej. Planta).")
 
+    # Integración del KIT DE EDICIÓN
     if st.session_state.video_url_actual:
         with st.expander("Ver Prompt Técnico del Agente"):
             st.code(st.session_state.prompt_video_procesado)
+        
         st.video(st.session_state.video_url_actual)
+        
+        st.markdown("### ✂️ Kit para Editor Humano (CapCut / Premiere)")
+        st.write("Descarga los activos (Assets) para realizar el ensamblaje final rápidamente.")
+        
+        col_v1, col_v2, col_v3 = st.columns(3)
+        with col_v1:
+            # En un entorno real, descargarías el archivo. Por ahora simulamos el botón.
+            st.button("📥 1. Descargar B-Roll (.mp4)", help="Clip crudo de Veo 3")
+        with col_v2:
+            st.button("📥 2. Descargar Locución (.mp3)", help="Audio generado de tu guion")
+        with col_v3:
+            st.button("📥 3. Descargar Subtítulos (.srt)", help="Tiempos exactos para incrustar")
+            
+        st.info("💡 **Flujo sugerido:** Arrastra estos 3 archivos a CapCut. Añade la canción en tendencia, ajusta cortes si es necesario y exporta. Tiempo estimado: 2 minutos.")
         
         if st.button("🗑️ Limpiar clip actual", key="btn_limpiar_clip"):
             st.session_state.video_url_actual = None
             st.rerun()
 
-# --- PESTAÑA 3: GOOGLE VIDS EXPORT ---
-with tab_vids:
-    st.subheader("Integración con Google Vids (docs.google.com/videos)")
-    st.write("Genera el documento base para que la IA de Google Workspace ensamble tu video automáticamente.")
+# --- NUEVA PESTAÑA: SEO PROGRAMÁTICO (Fase 3) ---
+with tab_seo:
+    st.subheader("Crecimiento Impulsado por Oferta")
+    st.write("Simulación del Trigger: Detecta automáticamente nuevos ingresos masivos de inventario y genera artículos para captar demanda.")
     
-    if st.button("Generar Documento Base para Vids"):
-        if st.session_state.contenido_actual:
-            doc_template = f"""
-            # Título del Video: ViveroOnline - Campaña
-            
-            ## Instrucciones para Google Vids:
-            - **Estilo:** Corporativo / Emocional
-            - **Formato:** Vertical (9:16)
-            - **Música:** Inspiradora, acústica
-            
-            ## Guion (Para Voiceover Automático):
-            {st.session_state.contenido_actual}
-            
-            ## Medios de apoyo:
-            (Inserta aquí los clips B-Roll descargados de la pestaña de Video o deja que Google Vids inserte stock gratuito).
-            """
-            st.code(doc_template, language="markdown")
-            st.info("Copia este texto y pégalo en un nuevo documento de Google Docs. Luego utiliza la opción 'Ayúdame a crear un video' en Google Vids utilizando ese documento como fuente.")
-        else:
-            st.warning("Primero genera un guion en la pestaña 'Textos y Guiones'.")
+    datos_mock_supabase = {
+        "especie": "Orquídeas Phalaenopsis (Colores Mixtos)",
+        "cantidad": 500,
+        "ubicacion": "Cajicá",
+        "vendedor": "Vivero El Edén"
+    }
+    
+    st.json(datos_mock_supabase)
+    
+    if st.button("Ejecutar Trigger SEO", type="primary"):
+        with st.spinner("Analizando inventario y redactando artículo de indexación..."):
+            try:
+                articulo = generar_seo_desde_inventario(datos_mock_supabase)
+                
+                if articulo:
+                    st.success("Artículo generado y listo para publicar en el CMS.")
+                    st.markdown(f"**H1:** {articulo.titulo_h1}")
+                    st.caption(f"**Slug:** /{articulo.slug}")
+                    st.markdown(f"**Meta:** {articulo.meta_description}")
+                    st.markdown("---")
+                    st.markdown(articulo.contenido_md)
+                    
+                    if st.button("🚀 Auto-Publicar en Blog (Simulado)"):
+                        st.balloons()
+                        st.toast("El artículo ha sido inyectado en la base de datos de producción.")
+            except Exception as e:
+                st.error(f"Error en el agente SEO: Asegúrate de tener creado el archivo agentes_crecimiento.py. Detalle: {e}")
