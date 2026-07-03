@@ -44,6 +44,30 @@ def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000"):
     return CampanaWhatsApp.model_validate_json(json_res) if json_res else None
 
 def generar_seo_desde_inventario(datos: dict):
-    prompt = f"Estratega SEO ViveroOnline. Inventario: {datos}. Crea artículo B2B técnico."
-    json_res = invocar_modelo_seguro(prompt, ArticuloSEO, 0.4)
+    prompt_b2b = f"""
+    Eres un Estratega SEO y Copywriter B2B experto en el sector agrónomo y de construcción en Colombia.
+    Tu objetivo es redactar un artículo SEO transaccional para ViveroOnline, diseñado para capturar la demanda de constructoras, arquitectos y paisajistas que buscan comprar lotes mayoristas.
+
+    DATOS DEL LOTE DISPONIBLE:
+    - Especie: {datos.get('especie')}
+    - Cantidad en Stock: {datos.get('cantidad')} unidades
+    - Ubicación Logística: {datos.get('ubicacion')}
+    - Vivero Productor: {datos.get('vendedor')}
+
+    INSTRUCCIONES DE REDACCIÓN (Usa el Framework PAS):
+    1. PROBLEMA (H2): Inicia identificando un dolor operativo crítico (ej. alta mortalidad vegetal en proyectos, plantas no aclimatadas al clima frío, retrasos en entregas).
+    2. AGITACIÓN (Párrafo): Explica el costo oculto de ese problema (pérdida de dinero por garantías de plantas muertas, entregas de obra retrasadas).
+    3. SOLUCIÓN (H2): Presenta este lote exacto de {datos.get('cantidad')} {datos.get('especie')} aclimatadas en {datos.get('ubicacion')} como la solución logística y biológica perfecta.
+    4. RESPALDO: Menciona a {datos.get('vendedor')} como un aliado estratégico verificado de ViveroOnline.
+
+    REGLAS ESTRICTAS:
+    - Responde EXCLUSIVAMENTE en el formato JSON estructurado según el esquema.
+    - El 'titulo_h1' debe incluir la especie, la palabra "Lote" o "Mayorista" y la ubicación.
+    - El contenido ('contenido_md') debe estar en Markdown impecable.
+    - Termina con un Call to Action (CTA) claro para cotizar el volumen completo.
+    - Tono: Consultivo, corporativo, directo al grano. Cero lenguaje romántico sobre la naturaleza; háblales de rentabilidad y eficiencia logística.
+    """
+    
+    # Invocamos al modelo con una temperatura baja (0.3) para priorizar estructura y precisión sobre creatividad excesiva
+    json_res = invocar_modelo_seguro(prompt_b2b, ArticuloSEO, 0.3)
     return ArticuloSEO.model_validate_json(json_res) if json_res else None
