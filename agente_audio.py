@@ -14,13 +14,14 @@ def generar_audio_elevenlabs(texto_guion: str) -> bytes | None:
     VOICE = "es-CO-GonzaloNeural"
     
     async def generar():
-        # Ajuste Pro:
-        # rate="+15%": Velocidad ideal para que el receptor sienta urgencia pero no pierda detalle.
-        # pitch="+0Hz": Mantener el tono natural pero firme.
+        # Ajuste alineado al ADN emocional de marca (Brand Book): la voz debe
+        # transmitir confianza y cercanía, nunca presión ni urgencia.
+        # rate="+5%": ligeramente más ágil que el ritmo neutro, sin sonar apurado.
+        # pitch="+0Hz": tono natural, firme.
         communicate = edge_tts.Communicate(
             texto_limpio, 
             VOICE, 
-            rate="+15%", 
+            rate="+5%", 
             pitch="+0Hz"
         )
         
