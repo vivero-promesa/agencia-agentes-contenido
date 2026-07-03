@@ -18,10 +18,18 @@ st.title("🌱 Centro de Comando - ViveroOnline")
 
 load_dotenv()
 
-# INICIALIZACIÓN SEGURA DE ADMINISTRADOR
-url_ext = st.secrets.get("SUPABASE_URL_EXTERNA")
-key_service = st.secrets.get("SUPABASE_SERVICE_KEY")
-supabase = create_client(url_ext, key_service) if url_ext and key_service else None
+# ==========================================
+# ARQUITECTURA DE DOBLE BASE DE DATOS
+# ==========================================
+# 1. MARKETPLACE (solo LECTURA): inventario, plantas, viveros
+url_mkt = st.secrets.get("SUPABASE_URL_EXTERNA")
+key_mkt = st.secrets.get("SUPABASE_SERVICE_KEY")
+supabase_mkt = create_client(url_mkt, key_mkt) if url_mkt and key_mkt else None
+
+# 2. AGENCIA (LECTURA/ESCRITURA): historial_contenidos, campanas_ejecutadas
+url_ag = st.secrets.get("SUPABASE_URL_AGENCIA")
+key_ag = st.secrets.get("SUPABASE_KEY_AGENCIA")
+supabase_ag = create_client(url_ag, key_ag) if url_ag and key_ag else None
 
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
@@ -73,7 +81,7 @@ with tab_whatsapp:
         else:
             st.warning("Por favor ingresa un objetivo.")
 
-    # Renderizado persistente (permite que el botón de audio funcione sin borrar pantalla)
+    # Renderizado persistente (el botón de audio funciona sin borrar pantalla)
     if st.session_state.get("wa_generado"):
         st.text_area("Copy WhatsApp:", value=st.session_state.wa_copy, height=100)
         st.text_area("Guion nota de voz:", value=st.session_state.wa_script, height=150)
@@ -151,7 +159,7 @@ with tab_video:
                     st.error(f"Error crítico en el orquestador: {e}")
 
 # ==========================================
-# --- PESTAÑA 4: SEO PROGRAMÁTICO (Motor Dinámico) ---
+# --- PESTAÑA 4: SEO PROGRAMÁTICO (lee del MARKETPLACE) ---
 # ==========================================
 with tab_seo:
     st.subheader("Trigger SEO: Generador de Artículos B2B")
@@ -160,13 +168,13 @@ with tab_seo:
 
     if modo_seo == "📡 Automatizado (Base de Datos)":
         if st.button("Analizar BD y Generar SEO"):
-            if not supabase:
-                st.error("Falta configurar la conexión a Supabase en los Secrets.")
+            if not supabase_mkt:
+                st.error("Falta configurar la conexión al Marketplace en los Secrets (SUPABASE_URL_EXTERNA / SUPABASE_SERVICE_KEY).")
             else:
                 with st.spinner("Decodificando esquema de base de datos y generando contenido..."):
                     try:
                         # 1. Último registro de inventario (Blindaje B2B)
-                        res_inv = supabase.table("inventario") \
+                        res_inv = supabase_mkt.table("inventario") \
                             .select("*") \
                             .eq("estado_planta", "disponible") \
                             .gte("stock", 20) \
@@ -179,8 +187,8 @@ with tab_seo:
                         else:
                             item = res_inv.data[0]
 
-                            planta_data = supabase.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
-                            vivero_data = supabase.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
+                            planta_data = supabase_mkt.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
+                            vivero_data = supabase_mkt.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
 
                             # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
                             cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
@@ -243,30 +251,35 @@ with tab_seo:
                 st.warning("Completa los campos requeridos para proceder.")
 
 # ==========================================
-# --- PESTAÑA 5: ORQUESTADOR 360 (Lotes Frescos + Candado + Historial) ---
+# --- PESTAÑA 5: ORQUESTADOR 360 ---
+# LEE del Marketplace | ESCRIBE en la Agencia
 # ==========================================
 with tab_360:
     st.subheader("🔥 Orquestador Maestro de Campaña 360")
-    st.markdown("Genera una campaña B2B unificada (SEO, WhatsApp y Video), la guarda en el historial y bloquea el lote para evitar duplicados.")
+    st.markdown("Lee el inventario del **Marketplace**, genera la campaña (SEO, WhatsApp y Video) y la guarda en la base de la **Agencia**.")
 
     if st.button("⚡ Lanzar Campaña 360", type="primary"):
-        if not supabase:
-            st.error("Error de conexión Supabase.")
+        if not supabase_mkt:
+            st.error("Falta la conexión al Marketplace (SUPABASE_URL_EXTERNA / SUPABASE_SERVICE_KEY).")
+        elif not supabase_ag:
+            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
         else:
             with st.spinner("Sincronizando agentes y ejecutando campaña..."):
                 try:
-                    # 1. Lógica de Lotes Frescos (trae 10 candidatos y filtra los ya procesados)
-                    res_inv = supabase.table("inventario").select("*").eq("estado_planta", "disponible").gte("stock", 20).order("inventario_id", desc=True).limit(10).execute()
-                    res_campanas = supabase.table("campanas_ejecutadas").select("inventario_id").execute()
+                    # 1. Lógica de Lotes Frescos
+                    #    Inventario: se lee del MARKETPLACE
+                    #    Candado de campañas: se lee de la AGENCIA
+                    res_inv = supabase_mkt.table("inventario").select("*").eq("estado_planta", "disponible").gte("stock", 20).order("inventario_id", desc=True).limit(10).execute()
+                    res_campanas = supabase_ag.table("campanas_ejecutadas").select("inventario_id").execute()
                     lotes_procesados = [c["inventario_id"] for c in res_campanas.data] if res_campanas.data else []
                     item = next((l for l in res_inv.data if l["inventario_id"] not in lotes_procesados), None)
 
                     if not item:
                         st.info("Todos los lotes actuales ya tienen campaña.")
                     else:
-                        # Extraer datos dinámicos
-                        planta_data = supabase.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
-                        vivero_data = supabase.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
+                        # Extraer datos dinámicos (MARKETPLACE)
+                        planta_data = supabase_mkt.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
+                        vivero_data = supabase_mkt.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
 
                         cols_nombre_p = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
                         nombre_especie = planta_data[cols_nombre_p[0]] if cols_nombre_p else "Planta"
@@ -282,15 +295,15 @@ with tab_360:
                         wa_res = generar_campana_whatsapp(f"Vender lote urgente de {item['stock']} {nombre_especie} en {locacion}.")
                         video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {nombre_especie} en {locacion}.")
 
-                        # 3. Guardado Histórico (Persistencia)
-                        supabase.table("historial_contenidos").insert([
+                        # 3. Guardado Histórico (AGENCIA)
+                        supabase_ag.table("historial_contenidos").insert([
                             {"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md},
                             {"tipo_contenido": "WHATSAPP", "titulo": "Copy WhatsApp", "contenido": wa_res.mensaje_texto},
                             {"tipo_contenido": "VIDEO", "titulo": "Guion Video", "contenido": video_res}
                         ]).execute()
 
-                        # 4. Cierre de Candado (Anti-Duplicidad)
-                        supabase.table("campanas_ejecutadas").insert({"inventario_id": item["inventario_id"]}).execute()
+                        # 4. Cierre de Candado Anti-Duplicidad (AGENCIA)
+                        supabase_ag.table("campanas_ejecutadas").insert({"inventario_id": item["inventario_id"]}).execute()
 
                         st.session_state.c360_data = {"lote": datos, "seo": seo_res, "wa": wa_res, "video": video_res}
                         st.session_state.c360_lista = True
@@ -302,7 +315,7 @@ with tab_360:
     if st.session_state.get("c360_lista"):
         data = st.session_state.c360_data
         lote = data["lote"]
-        st.success("Campaña generada y guardada en historial.")
+        st.success("Campaña generada y guardada en el historial de la Agencia.")
         st.info(f"🎯 **Campaña Activa:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']} ({lote['vendedor']})")
 
         col1, col2 = st.columns(2)
@@ -334,26 +347,22 @@ with tab_360:
                                 st.warning("Fallo en la API de ElevenLabs.")
 
 # ==========================================
-# --- PESTAÑA 6: HISTORIAL ---
+# --- PESTAÑA 6: HISTORIAL (lee de la AGENCIA) ---
 # ==========================================
 with tab_historial:
-    st.subheader("📜 Historial de Contenido")
-    if not supabase:
-        st.error("No hay conexión con Supabase.")
+    st.subheader("📜 Historial de Contenido Generado")
+    if not supabase_ag:
+        st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
     else:
         try:
-            # Intentamos obtener los datos
-            res = supabase.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
-            
+            res = supabase_ag.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
             if not res.data:
-                st.info("Aún no hay contenido en el historial.")
+                st.info("Aún no hay contenido en el historial. Lanza una Campaña 360 para empezar.")
             else:
                 for item in res.data:
                     with st.expander(f"{item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')}"):
                         st.markdown(item.get('contenido', ''))
-                        
         except Exception as e:
-            # ESTA LÍNEA TE DIRÁ EXACTAMENTE QUÉ ESTÁ PASANDO
             st.error(f"❌ Error técnico real: {e}")
 
 # ==========================================
