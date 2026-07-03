@@ -25,12 +25,14 @@ supabase = create_client(url_ext, key_service) if url_ext and key_service else N
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
 # ==========================================
-tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360 = st.tabs([
+tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360, tab_historial, tab_competencia = st.tabs([
     "📝 Textos", 
     "💬 WhatsApp", 
     "🎬 Video", 
     "🚀 SEO",
-    "🔥 Campaña 360"
+    "🔥 Campaña 360",
+    "📜 Historial",
+    "🧠 Competencia"
 ])
 
 # --- PESTAÑAS 1 A 4 (Mantenidas según tu estructura original) ---
