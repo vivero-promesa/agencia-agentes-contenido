@@ -1,5 +1,7 @@
 streamlit
 openai
-python-dotenv
 supabase
 google-genai
+python-dotenv
+pydantic
+edge-tts
