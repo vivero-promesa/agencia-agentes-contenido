@@ -1,89 +1,90 @@
+# Archivo: agente.py
+import os
 import streamlit as st
-from google import genai
-import json
+from openai import OpenAI
 
+from identidad_marca import IDENTIDAD_COMPACTA
 from brand_book import GUIA_VISUAL_VIDEO
 
+PROMPT_SISTEMA_MAESTRO = f"""
+{IDENTIDAD_COMPACTA}
 
-def get_video_client():
-    """Inicializa de forma segura el cliente oficial de Google GenAI."""
-    try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
-        if not api_key:
-            return None
-        return genai.Client(api_key=api_key)
-    except Exception as e:
-        st.error(f"Error de configuración en las llaves de Google AI: {e}")
+Eres el Director Creativo de ViveroOnline. Escribes para compradores
+institucionales (constructoras, paisajistas, arquitectos, jefes de compras
+B2B) — usa el discurso "frente al mercado" de la identidad de marca.
+
+TONO: profesional, concreto, orientado a resultados — nunca corporativo frío
+ni exagerado, nunca lenguaje de urgencia o presión.
+"""
+
+
+def get_groq_client():
+    api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
+    if not api_key:
         return None
+    return OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
 
-def optimizar_prompt_produccion(escena_data):
-    """
-    Agente Productor: Toma la definición humana de la escena y la traduce
-    a un prompt de ingeniería visual para Veo 3.1, anclado al Brand Book
-    real de ViveroOnline (vivero familiar de la Sabana de Bogotá), no a
-    una estética genérica de bodega industrial.
-    """
-    prompt_base = (
-        f"Sujeto principal y acción: {escena_data.get('visual', 'trabajo diario en el vivero')}. "
-        f"Atmósfera: {escena_data.get('emocion', 'cercana, tranquila, auténtica')}. "
-        f"Cámara: {escena_data.get('camara', 'plano medio, movimiento suave de estabilizador')}. "
-        f"{GUIA_VISUAL_VIDEO.strip()} "
-        f"Regla estricta: NO incluir texto en el video. Dejar tercio inferior despejado para subtítulos."
-    )
-    return prompt_base
-
-
-def generar_video_escena(id_escena, prompt_tecnico):
-    """Llama a la API de Google Veo 3.1 para generar el B-Roll."""
-    client = get_video_client()
+def redactar_guion_viral(tema, tipo_publico="Constructoras y Jefes de Compras B2B"):
+    client = get_groq_client()
     if not client:
-        return None
+        return "⚠️ Error: Cliente Groq no inicializado."
+
+    instrucciones = f"""
+    Tema Visual: {tema}
+    Público: {tipo_publico}
+
+    Genera dos secciones obligatorias en formato Markdown:
+
+    1. GUION NARRATIVO: texto para el locutor, tono cercano y profesional,
+       nunca de venta agresiva.
+
+    2. TABLA TÉCNICA PARA VEO 3 / VIDS: una tabla con columnas
+       Escena | Visual | Cámara | Nota de estilo, donde cada fila respete
+       esta guía visual (vivero real de la Sabana de Bogotá, no bodega
+       industrial genérica):
+
+    {GUIA_VISUAL_VIDEO.strip()}
+    """
 
     try:
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt_tecnico,
-            config={
-                "aspect_ratio": "9:16",
-                "duration_seconds": 5  # Control de ritmo para redes sociales
-            }
+        respuesta = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": PROMPT_SISTEMA_MAESTRO},
+                {"role": "user", "content": instrucciones}
+            ],
+            temperature=0.5
         )
-
-        # Extracción segura de la URI del video
-        if hasattr(operation, 'generated_videos') and operation.generated_videos:
-            return operation.generated_videos[0].video.uri
-        return getattr(operation, 'output', None)
-
+        return respuesta.choices[0].message.content
     except Exception as e:
-        st.error(f"Error generando render para la escena {id_escena}: {e}")
-        return None
+        return f"❌ Fallo en la comunicación con Groq: {e}"
 
 
-def ejecutar_pipeline_agencia(storyboard_json):
+def redactar_articulo_seo(tema):
+    client = get_groq_client()
+    if not client:
+        return "⚠️ Error: Cliente Groq no inicializado."
+
+    prompt = f"""
+    Tema: '{tema}'
+    Estructura requerida (Framework PAS B2B):
+    1. PROBLEMA (H2)
+    2. AGITACIÓN (Párrafo — sin exagerar ni inventar cifras)
+    3. SOLUCIÓN (H2/H3)
+    4. RESPALDO LOGÍSTICO (cómo se coordina el despacho de planta viva)
+    5. CTA (invitación concreta a cotizar en ViveroOnline)
     """
-    Orquestador de la Agencia: Procesa todo el comercial secuencialmente.
-    """
+
     try:
-        storyboard = json.loads(storyboard_json)
-    except json.JSONDecodeError:
-        st.error("El formato del storyboard no es un JSON válido.")
-        return {}
-
-    resultados = {}
-
-    for clave, escena in storyboard.items():
-        st.write(f"🎬 **Renderizando: {escena.get('nombre', clave)}**")
-
-        if escena.get("tipo") == "IA_GENERATIVE":
-            prompt_listo = optimizar_prompt_produccion(escena)
-            st.caption(f"🤖 *Prompt enviado a Veo 3.1:* {prompt_listo}")
-
-            url_video = generar_video_escena(clave, prompt_listo)
-            resultados[clave] = {"status": "Listo", "url": url_video, "texto": escena.get("texto", "")}
-
-        elif escena.get("tipo") == "UI_RECORDING":
-            st.info(f"📱 *Nota:* Esta escena requiere grabación de pantalla de app.viveroonline.com.co.")
-            resultados[clave] = {"status": "Requiere_Media_Local", "texto": escena.get("texto", "")}
-
-    return resultados
+        respuesta = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": PROMPT_SISTEMA_MAESTRO},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4
+        )
+        return respuesta.choices[0].message.content
+    except Exception as e:
+        return f"❌ Fallo en la comunicación con Groq: {e}"
