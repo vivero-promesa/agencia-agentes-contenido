@@ -3,53 +3,35 @@ import streamlit as st
 from openai import OpenAI
 
 # ==========================================
-# CEREBRO ESTRATÉGICO: OCÉANO AZUL
+# CEREBRO ESTRATÉGICO: AGTECH DE TIERRA
 # ==========================================
 PROMPT_SISTEMA_MAESTRO = """
-Rol Maestro: Eres el motor de crecimiento estratégico de ViveroOnline, la plataforma inteligente de abastecimiento ornamental y soluciones verdes en Colombia.
-Restricción de Enfoque: NUNCA actúes como un vivero minorista tradicional o un simple directorio. Tu objetivo es conectar grandes volúmenes de producción local con proyectos urbanos, paisajísticos y arquitectónicos (Constructoras, Hoteles, Oficinas).
-Tono B2B: Profesional, centrado en rentabilidad, logística integrada, estandarización técnica y cumplimiento de estándares ESG.
-Tono Viveristas (B2C/Captación): Empático, directo, sin jerga técnica, enfocado en generar visibilidad nacional y ventas recurrentes mediante tecnología sin fricción.
-Misión: Toda pieza generada debe posicionar la "inteligencia paisajística" y resolver problemas reales de abastecimiento verde, educando al mercado y mostrando soluciones urbanas verdes.
+Eres el Director Creativo de ViveroOnline. Tu marca personal es el 'AgTech de Tierra'.
+- TONO: Directo, técnico, profesional, orientado a resultados. No uses adjetivos floridos. 
+  Usa términos de negocio: 'stock', 'eficiencia', 'tasa de supervivencia', 'optimización', 'rendimiento'.
+- ESTILO B (Productividad): Muestra el trabajo duro, el volumen, el invernadero, el esfuerzo logístico y la capacidad de despacho masivo.
+- ESTILO C (AgTech): Muestra la precisión, la selección genética, el control, los datos, y la inteligencia detrás de cada planta.
+- TU OBJETIVO: Que un constructor vea tu contenido y piense: 'Estos tipos tienen el volumen que necesito y la tecnología para que no me fallen'.
+- FORMATO VEO 3: Para cada guion, genera una tabla técnica de prompts para video con lenguaje cinematográfico: "Cinematic drone shot", "Macro lens", "Golden hour", "Depth of field".
 """
 
 def get_groq_client():
-    """
-    Inicializa el cliente de Groq de forma segura (Lazy Loading).
-    Solo se ejecuta cuando se necesita generar contenido, evitando caídas en el arranque.
-    """
-    try:
-        # Busca en st.secrets primero, si falla busca en las variables locales (.env)
-        api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
-        
-        if not api_key:
-            return None
-            
-        return OpenAI(
-            api_key=api_key, 
-            base_url="https://api.groq.com/openai/v1"
-        )
-    except Exception as e:
-        print(f"Error de inicialización de cliente: {e}")
-        return None
+    api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
+    if not api_key: return None
+    return OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
 def redactar_guion_viral(tema, tipo_publico):
-    """Genera un guion corto optimizado para retención en redes sociales y estrategia Océano Azul."""
     client = get_groq_client()
-    if not client:
-        return "⚠️ Error: Cliente no inicializado. Revisa tu GROQ_API_KEY."
+    if not client: return "⚠️ Error: Cliente no inicializado."
     
     instrucciones = f"""
-    Tema del video: {tema}
-    Público objetivo: {tipo_publico}
-    Formato: Guion para video corto vertical (Reel/TikTok), máximo 60 segundos.
+    Tema: {tema}
+    Público: {tipo_publico}
     
-    Reglas de Ejecución:
-    1. Primeros 3 segundos: Un gancho visual y narrativo brutal que capte la atención inmediatamente.
-    2. Desarrollo: Valor directo aplicando estrictamente tu directriz de Océano Azul (inteligencia paisajística, solución B2B o educación al productor).
-    3. Cierre: Llamado a la acción (CTA) claro invitando a visitar ViveroOnline.
-    
-    Devuelve SOLO el guion estructurado.
+    Genera dos secciones:
+    1. GUION NARRATIVO: Texto para el locutor. Usa un ritmo ágil y términos de 'AgTech de Tierra'.
+    2. TABLA TÉCNICA VEO 3: Tabla con columnas | Tiempo | Prompt Técnico |. 
+       Cada prompt debe describir entorno, acción y calidad visual (4k, cinematic, hyper-realistic).
     """
     
     try:
@@ -59,29 +41,27 @@ def redactar_guion_viral(tema, tipo_publico):
                 {"role": "system", "content": PROMPT_SISTEMA_MAESTRO},
                 {"role": "user", "content": instrucciones}
             ],
-            temperature=0.7
+            temperature=0.6
         )
         return respuesta.choices[0].message.content
     except Exception as e:
-        return f"❌ Fallo en la API de Groq: {e}"
+        return f"❌ Fallo en Groq: {e}"
 
 def redactar_articulo_seo(tema):
-    """Genera un artículo de blog estructurado, optimizado para buscadores y autoridad B2B."""
     client = get_groq_client()
-    if not client:
-        return "⚠️ Error: Cliente no inicializado. Revisa tu GROQ_API_KEY."
+    if not client: return "⚠️ Error: Cliente no inicializado."
     
     prompt = f"""
-    Tema del Artículo: '{tema}'
+    Tema: '{tema}'
     
     Estructura requerida:
-    1. Título gancho optimizado para buscadores (H1 persuasivo orientado a tomadores de decisión como arquitectos o compradores de constructoras).
-    2. Introducción que conecte con el problema logístico de abastecimiento o la necesidad de digitalización del productor.
-    3. Desarrollo con subtítulos claros (H2 y H3) que resuelva la duda técnica (ej. casos de uso, sostenibilidad urbana, arquitectura biofílica).
-    4. Conclusión que posicione a ViveroOnline como el ecosistema definitivo y la infraestructura verde líder de la Sabana de Bogotá.
-    5. Llamado a la acción (CTA) directo: Invita a cotizar proyectos o registrar viveros en el marketplace.
+    1. H1 persuasivo orientado a arquitectos o constructores.
+    2. Introducción técnica enfocada en eficiencia y suministro.
+    3. Desarrollo (H2/H3) enfocando los datos, la logística y la inteligencia paisajística.
+    4. Conclusión que posicione a ViveroOnline como infraestructura verde líder.
+    5. CTA directo a cotización o registro.
     
-    Formato: Responde exclusivamente en Markdown. Usa un tono profesional e informativo.
+    Tono: Profesional, técnico, AgTech. Markdown exclusivo.
     """
     
     try:
@@ -91,8 +71,8 @@ def redactar_articulo_seo(tema):
                 {"role": "system", "content": PROMPT_SISTEMA_MAESTRO},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.4 # Temperatura más baja para mantener precisión técnica y coherencia SEO
+            temperature=0.4
         )
         return respuesta.choices[0].message.content
     except Exception as e:
-        return f"❌ Fallo en la API de Groq: {e}"
+        return f"❌ Fallo en Groq: {e}"
