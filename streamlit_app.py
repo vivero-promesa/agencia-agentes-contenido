@@ -51,51 +51,49 @@ with tab_whatsapp:
                 else:
                     st.warning("No se pudo generar el audio.")
 
-# --- PESTAÑA SEO PROGRAMÁTICO (REESTRUCTURADA) ---
+# --- PESTAÑA SEO PROGRAMÁTICO (CORREGIDA CON DIAGNÓSTICO) ---
 with tab_seo:
     st.subheader("Trigger SEO: Generador de Artículos B2B")
     
-    # Selector de modo operativo
-    modo_seo = st.radio("Modo de ingesta de datos:", ["📡 Conexión a Base de Datos (Automático)", "✍️ Ingreso Manual (Respaldo)"], horizontal=True)
+    modo_seo = st.radio("Modo:", ["📡 Conexión a Base de Datos", "✍️ Ingreso Manual"], horizontal=True)
     
-    st.markdown("---")
-    
-    if modo_seo == "📡 Conexión a Base de Datos (Automático)":
+    if modo_seo == "📡 Conexión a Base de Datos":
         if st.button("Ejecutar Trigger Automático"):
-            if not supabase:
-                st.error("Falta configurar SUPABASE_SERVICE_KEY en los Secrets.")
-            else:
-                with st.spinner("Consultando inventario de forma segura..."):
-                    try:
-                        # La Service Key ignora el RLS, permitiendo la lectura
-                        res = supabase.table("inventario").select("*").order("inventario_id", desc=True).limit(1).execute()
-                        
-                        if not res.data:
-                            st.warning("El inventario está vacío.")
-                        else:
-                            item = res.data[0]
-                            
-                            # Consultas relacionadas
-                            planta = supabase.table("plantas").select("especie_nombre").eq("id", item["planta_id"]).execute()
-                            vivero = supabase.table("viveros").select("vendedor_nombre, ubicacion").eq("id", item["vivero_id"]).execute()
-                            
-                            datos_preparados = {
-                                "especie": planta.data[0]["especie_nombre"] if planta.data else f"Planta ID {item['planta_id']}",
-                                "cantidad": item["stock"],
-                                "ubicacion": vivero.data[0]["ubicacion"] if vivero.data else "Sabana de Bogotá",
-                                "vendedor": vivero.data[0]["vendedor_nombre"] if vivero.data else "Aliado Estratégico"
-                            }
-                            
-                            articulo = generar_seo_desde_inventario(datos_preparados)
-                            
-                            if articulo:
-                                st.success(f"Artículo B2B generado para: {datos_preparados['especie']}")
-                                st.markdown(f"### {articulo.titulo_h1}")
-                                st.markdown(articulo.contenido_md)
-                            else:
-                                st.error("Fallo en la comunicación con el Agente SEO.")
-                    except Exception as e:
-                        st.error(f"Error de ejecución: {e}")
+            with st.spinner("Consultando esquema y datos..."):
+                try:
+                    # 1. Obtener registro de inventario
+                    res = supabase.table("inventario").select("*").order("inventario_id", desc=True).limit(1).execute()
+                    item = res.data[0]
+                    
+                    # 2. INTENTO DE CONSULTA (Con manejo de error informativo)
+                    # Primero intentamos obtener las tablas.
+                    # Si falla, el bloque except nos dirá qué columnas existen realmente.
+                    
+                    # AQUÍ ESTÁ EL CAMBIO:
+                    # Vamos a pedirle a Supabase que nos de cualquier columna de plantas para ver el nombre real
+                    planta_res = supabase.table("plantas").select("*").eq("id", item["planta_id"]).limit(1).execute()
+                    vivero_res = supabase.table("viveros").select("*").eq("id", item["vivero_id"]).limit(1).execute()
+                    
+                    # Si llega aquí, significa que las tablas existen. 
+                    # Ahora extraeremos las llaves (nombres de columna) reales:
+                    cols_planta = list(planta_res.data[0].keys()) if planta_res.data else []
+                    cols_vivero = list(vivero_res.data[0].keys()) if vivero_res.data else []
+                    
+                    st.write(f"Columnas detectadas en 'plantas': {cols_planta}")
+                    st.write(f"Columnas detectadas en 'viveros': {cols_vivero}")
+                    
+                    # AHORA, reemplaza los nombres abajo por los que aparecieron en pantalla
+                    # Ejemplo: Si aparece 'nombre' en vez de 'especie_nombre', cambia el código aquí abajo:
+                    especie = planta_res.data[0].get('nombre', 'Desconocida') # <--- AJUSTA 'nombre'
+                    vendedor = vivero_res.data[0].get('nombre_vivero', 'Aliado') # <--- AJUSTA 'nombre_vivero'
+                    
+                    datos = {"especie": especie, "cantidad": item["stock"], "vendedor": vendedor, "ubicacion": "Bogotá"}
+                    articulo = generar_seo_desde_inventario(datos)
+                    st.markdown(articulo.contenido_md)
+
+                except Exception as e:
+                    st.error(f"Error técnico: {e}")
+                    st.info("💡 Tip: Mira arriba los nombres de las columnas detectadas y ajusta el código.")
 
     else:
         # MODO MANUAL: Por si la BD falla o necesitas crear un artículo para un vivero que aún no está en el sistema
