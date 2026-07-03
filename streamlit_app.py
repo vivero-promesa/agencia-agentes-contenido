@@ -1,11 +1,11 @@
 import streamlit as st
 import os
+import time  # Importado para manejar las pausas de la cuota de API
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from google import genai
 
 # Importación de tus agentes existentes
-# Asegúrate de tener estos archivos en tu repositorio
 from agente import redactar_guion_viral
 from agente_blog import redactar_articulo_seo
 
@@ -118,7 +118,7 @@ with tab_video:
     if not client_ai:
         st.error("⚠️ La clave `GEMINI_API_KEY` no está configurada.")
     
-    # Plantillas mejoradas con parámetros de agencia (espacio negativo)
+    # Plantillas mejoradas con parámetros de agencia
     PLANTILLAS_ESTRATEGICAS = {
         "🌱 Atraer Constructoras y Paisajistas (B2B)": {
             "estilo": "Documental cinematográfico hiperrealista, grano fílmico sutil",
@@ -146,48 +146,65 @@ with tab_video:
         
     detalles_entorno = st.text_area("🌅 Entorno (Auto):", value=config_actual["entorno"])
 
+    # BOTÓN CON LÓGICA DE REINTENTOS INCORPORADA
     if st.button("Renderizar B-Roll con Veo 3", type="primary"):
         if especie_planta:
-            # PROMPT DE AGENCIA: Inyectando reglas de espacio y formato vertical
             prompt_final_veo = (
                 f"Formato vertical 9:16. {estilo_visual}. "
-                f"Sujeto principal: {especie_planta}. "
-                f"Contexto: {detalles_entorno}. "
-                f"IMPORTANTE: Dejar espacio negativo (desenfoque suave) en los tercios superior e inferior para superposición de UI y subtítulos. "
+                f"Sujeto principal: {especie_planta}. Contexto: {detalles_entorno}. "
+                f"IMPORTANTE: Dejar espacio negativo en los tercios superior e inferior. "
                 f"Sin texto en pantalla, calidad 4K, texturas orgánicas."
             )
-            
             st.session_state.prompt_video_procesado = prompt_final_veo
             
-            with st.spinner("Agente renderizando clip... (Toma ~1 minuto) 🎬"):
-                try:
-                    operation = client_ai.models.generate_videos(
-                        model="veo-3.1-generate-preview",
-                        prompt=prompt_final_veo,
-                        config={"aspect_ratio": "9:16"}
-                    )
-                    
-                    if hasattr(operation, 'generated_videos') and operation.generated_videos:
-                        st.session_state.video_url_actual = operation.generated_videos[0].video.uri
-                    else:
-                        st.session_state.video_url_actual = operation.output
+            # Bucle de reintentos (Exponential Backoff)
+            max_reintentos = 3
+            tiempo_espera = 30 # Segundos iniciales
+            exito = False
+            
+            with st.spinner("Agente renderizando clip... 🎬"):
+                for intento in range(max_reintentos):
+                    try:
+                        operation = client_ai.models.generate_videos(
+                            model="veo-3.1-generate-preview",
+                            prompt=prompt_final_veo,
+                            config={"aspect_ratio": "9:16"}
+                        )
                         
-                except Exception as e:
-                    error_str = str(e)
-                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                        st.warning("⏳ Cuota gratuita alcanzada. Espera unos minutos.")
-                    else:
-                        st.error(f"Fallo en Veo 3: {e}")
+                        # Si llega aquí, fue exitoso
+                        if hasattr(operation, 'generated_videos') and operation.generated_videos:
+                            st.session_state.video_url_actual = operation.generated_videos[0].video.uri
+                        else:
+                            st.session_state.video_url_actual = operation.output
+                        
+                        exito = True
+                        break # Salimos del bucle si fue exitoso
+                        
+                    except Exception as e:
+                        error_str = str(e)
+                        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                            if intento < max_reintentos - 1:
+                                st.toast(f"⏳ Cuota alcanzada. El agente esperará {tiempo_espera} segundos y reintentará (Intento {intento + 1}/{max_reintentos})...")
+                                time.sleep(tiempo_espera)
+                                tiempo_espera *= 2 # Duplicamos el tiempo de espera (30s, 60s...)
+                            else:
+                                st.error("❌ Límite de cuota persistente. Intenta de nuevo en 1 hora.")
+                        else:
+                            st.error(f"Fallo crítico en Veo 3: {e}")
+                            break # Si es un error distinto a cuota, no reintentamos
+                
+                if exito:
+                    st.success("¡Clip renderizado! Listo para tus redes.")
+
         else:
             st.warning("⚠️ Ingresa un protagonista (ej. Planta).")
 
     if st.session_state.video_url_actual:
-        st.success("¡Clip renderizado! Listo para tus redes.")
         with st.expander("Ver Prompt Técnico del Agente"):
             st.code(st.session_state.prompt_video_procesado)
         st.video(st.session_state.video_url_actual)
         
-        if st.button("🗑️ Limpiar", key="btn_limpiar_clip"):
+        if st.button("🗑️ Limpiar clip actual", key="btn_limpiar_clip"):
             st.session_state.video_url_actual = None
             st.rerun()
 
