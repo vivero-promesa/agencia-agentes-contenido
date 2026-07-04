@@ -65,12 +65,18 @@ with tab_texto:
 # ==========================================
 with tab_whatsapp:
     st.subheader("Captación Directa (Fricción Cero)")
+    audiencia_wa = st.radio(
+        "¿A quién le escribes?",
+        options=["institucional", "viverista"],
+        format_func=lambda x: "Comprador institucional (paisajista/constructora)" if x == "institucional" else "Viverista (productor)",
+        horizontal=True
+    )
     obj_wa = st.text_input("Objetivo de la campaña:", placeholder="Ej: Vender 500 Eugenias a paisajistas")
 
     if st.button("Generar Kit de WhatsApp"):
         if obj_wa:
             with st.spinner("Conectando con Agente de Crecimiento..."):
-                campana = generar_campana_whatsapp(obj_wa)
+                campana = generar_campana_whatsapp(obj_wa, audiencia=audiencia_wa)
                 if campana:
                     st.session_state.wa_copy = campana.mensaje_texto
                     st.session_state.wa_script = campana.guion_nota_voz
@@ -292,7 +298,7 @@ with tab_360:
 
                         # 2. Ejecutar Agentes
                         seo_res = generar_seo_desde_inventario(datos)
-                        wa_res = generar_campana_whatsapp(f"Vender lote urgente de {item['stock']} {nombre_especie} en {locacion}.")
+                        wa_res = generar_campana_whatsapp(f"Vender lote disponible de {item['stock']} {nombre_especie} en {locacion}.", audiencia="institucional")
                         video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {nombre_especie} en {locacion}.")
 
                         # 3. Guardado Histórico (AGENCIA)
