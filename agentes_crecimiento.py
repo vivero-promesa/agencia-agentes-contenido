@@ -43,30 +43,49 @@ def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
     return None
 
 
-def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000"):
+def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional"):
     """
-    Genera un kit de WhatsApp (mensaje de texto + guion de nota de voz) para
-    captar compradores institucionales (paisajistas, constructoras). Usa el
-    discurso "frente al mercado" de la identidad de marca, pero con el
-    formato corto y directo propio de WhatsApp — nunca corporativo frío.
+    Genera un kit de WhatsApp (mensaje de texto + guion de nota de voz).
+
+    audiencia:
+      - "institucional" (default): comprador (paisajista, constructora,
+        arquitecto). Discurso "frente al mercado" — captación o cierre de venta.
+      - "viverista": productor. Discurso "frente al viverista" — onboarding,
+        activación o resolver una duda sobre el marketplace. Lenguaje simple,
+        cero tecnicismos, nunca hacerlo sentir atrasado.
     """
+    if audiencia == "viverista":
+        instrucciones_audiencia = """
+Le escribes a un VIVERISTA (productor), no a un comprador. Usa el discurso
+"frente al viverista" de la identidad de marca: lenguaje simple, cercano,
+cero tecnicismos. Nunca lo hagas sentir atrasado por no saber de tecnología.
+El objetivo suele ser onboarding, activación en el marketplace o resolver
+una duda — no una venta.
+"""
+    else:
+        instrucciones_audiencia = """
+Le escribes a un COMPRADOR INSTITUCIONAL (paisajista, constructora,
+arquitecto). Usa el discurso "frente al mercado" de la identidad de marca:
+profesional pero cercano, nunca corporativo frío. El objetivo suele ser
+captación o cierre de una venta concreta.
+"""
+
     prompt_wa = f"""
 {IDENTIDAD_COMPACTA}
 
-Eres el encargado de Captación Directa de ViveroOnline. Vas a escribir un
-mensaje de WhatsApp para un comprador institucional (paisajista, constructora
-o arquitecto), con el objetivo de:
+{instrucciones_audiencia}
+
+Eres el encargado de comunicación por WhatsApp de ViveroOnline.
 
 OBJETIVO DE LA CAMPAÑA: {objetivo}
 
 Instrucciones de formato — "Fricción Cero":
 1. mensaje_texto: máximo 3-4 líneas, directo al grano, con 1-2 emojis (🌿🚚)
-   naturales, no forzados. Debe mencionar qué se ofrece, cantidad/disponibilidad
-   si aplica, y terminar invitando a responder o cotizar — sin presión ni
-   urgencia artificial ("últimas unidades", "solo hoy" quedan prohibidos).
+   naturales, no forzados. Sin presión ni urgencia artificial ("últimas
+   unidades", "solo hoy" quedan prohibidos).
 2. guion_nota_voz: versión hablada, conversacional, como si un asesor
-   llamara al comprador — más cálido que el texto, pero igual de concreto.
-   Debe sonar a persona real, no a locución publicitaria.
+   llamara — más cálido que el texto, pero igual de concreto. Debe sonar a
+   persona real, no a locución publicitaria.
 3. link_wa: usa el número {numero} en formato
    https://wa.me/{numero}?text=<mensaje_texto codificado para URL>
 
