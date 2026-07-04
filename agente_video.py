@@ -1,6 +1,8 @@
 import streamlit as st
 from google import genai
+from google.genai import types
 import json
+import time
 
 from brand_book import GUIA_VISUAL_VIDEO
 
@@ -34,26 +36,44 @@ def optimizar_prompt_produccion(escena_data):
     return prompt_base
 
 
-def generar_video_escena(id_escena, prompt_tecnico):
-    """Llama a la API de Google Veo 3.1 para generar el B-Roll."""
+def generar_video_escena(id_escena, prompt_tecnico, duracion_segundos=8):
+    """
+    Llama a la API de Google Veo 3.1 para generar el B-Roll.
+
+    Nota técnica: la generación de video es un proceso ASÍNCRONO (long-running
+    operation) — no basta con llamar a generate_videos, hay que esperar
+    (poll) hasta que la operación termine antes de leer el resultado.
+    duracion_segundos debe estar entre 4 y 8 (límite de la API).
+    """
     client = get_video_client()
     if not client:
         return None
+
+    duracion_segundos = max(4, min(8, duracion_segundos))
 
     try:
         operation = client.models.generate_videos(
             model="veo-3.1-generate-preview",
             prompt=prompt_tecnico,
-            config={
-                "aspect_ratio": "9:16",
-                "duration_seconds": 5  # Control de ritmo para redes sociales
-            }
+            config=types.GenerateVideosConfig(
+                aspect_ratio="9:16",
+                duration_seconds=duracion_segundos,
+            )
         )
 
-        # Extracción segura de la URI del video
-        if hasattr(operation, 'generated_videos') and operation.generated_videos:
-            return operation.generated_videos[0].video.uri
-        return getattr(operation, 'output', None)
+        # Esperar a que termine el render (operación asíncrona)
+        with st.spinner(f"Renderizando escena {id_escena}... esto puede tardar unos minutos"):
+            while not operation.done:
+                time.sleep(10)
+                operation = client.operations.get(operation)
+
+        if operation.response and operation.response.generated_videos:
+            return operation.response.generated_videos[0].video.uri
+
+        if operation.error:
+            st.error(f"Veo 3.1 no pudo renderizar la escena {id_escena}: {operation.error}")
+
+        return None
 
     except Exception as e:
         st.error(f"Error generando render para la escena {id_escena}: {e}")
