@@ -3,6 +3,7 @@ from google import genai
 from google.genai import types
 import json
 import time
+import random
 
 from brand_book import GUIA_VISUAL_VIDEO
 
@@ -36,48 +37,79 @@ def optimizar_prompt_produccion(escena_data):
     return prompt_base
 
 
-def generar_video_escena(id_escena, prompt_tecnico, duracion_segundos=8):
+def _es_error_de_cuota(excepcion) -> bool:
+    texto = str(excepcion)
+    return "RESOURCE_EXHAUSTED" in texto or "429" in texto
+
+
+def generar_video_escena(id_escena, prompt_tecnico, duracion_segundos=8, max_reintentos=4):
     """
     Llama a la API de Google Veo 3.1 para generar el B-Roll.
 
-    Nota técnica: la generación de video es un proceso ASÍNCRONO (long-running
-    operation) — no basta con llamar a generate_videos, hay que esperar
-    (poll) hasta que la operación termine antes de leer el resultado.
-    duracion_segundos debe estar entre 4 y 8 (límite de la API).
+    Notas técnicas:
+    - La generación de video es ASÍNCRONA (long-running operation) — se espera
+      (poll) con operation.done hasta que termina antes de leer el resultado.
+    - duracion_segundos debe estar entre 4 y 8 (límite de la API), se acota
+      automáticamente.
+    - Ante error 429 (RESOURCE_EXHAUSTED / límite de cuota), reintenta con
+      backoff exponencial + jitter hasta max_reintentos veces. Si la cuota
+      está agotada por completo (no es un límite transitorio por minuto),
+      los reintentos no ayudan — hay que revisar la facturación en
+      https://ai.dev/rate-limit.
     """
     client = get_video_client()
     if not client:
         return None
 
     duracion_segundos = max(4, min(8, duracion_segundos))
+    espera_base = 15  # segundos
 
-    try:
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt_tecnico,
-            config=types.GenerateVideosConfig(
-                aspect_ratio="9:16",
-                duration_seconds=duracion_segundos,
+    for intento in range(max_reintentos + 1):
+        try:
+            operation = client.models.generate_videos(
+                model="veo-3.1-generate-preview",
+                prompt=prompt_tecnico,
+                config=types.GenerateVideosConfig(
+                    aspect_ratio="9:16",
+                    duration_seconds=duracion_segundos,
+                )
             )
-        )
 
-        # Esperar a que termine el render (operación asíncrona)
-        with st.spinner(f"Renderizando escena {id_escena}... esto puede tardar unos minutos"):
-            while not operation.done:
-                time.sleep(10)
-                operation = client.operations.get(operation)
+            with st.spinner(f"Renderizando escena {id_escena}... esto puede tardar unos minutos"):
+                while not operation.done:
+                    time.sleep(10)
+                    operation = client.operations.get(operation)
 
-        if operation.response and operation.response.generated_videos:
-            return operation.response.generated_videos[0].video.uri
+            if operation.response and operation.response.generated_videos:
+                return operation.response.generated_videos[0].video.uri
 
-        if operation.error:
-            st.error(f"Veo 3.1 no pudo renderizar la escena {id_escena}: {operation.error}")
+            if operation.error:
+                st.error(f"Veo 3.1 no pudo renderizar la escena {id_escena}: {operation.error}")
 
-        return None
+            return None
 
-    except Exception as e:
-        st.error(f"Error generando render para la escena {id_escena}: {e}")
-        return None
+        except Exception as e:
+            if _es_error_de_cuota(e) and intento < max_reintentos:
+                espera = espera_base * (2 ** intento) + random.uniform(0, 3)
+                st.warning(
+                    f"⏳ Límite de cuota alcanzado en escena {id_escena}. "
+                    f"Reintentando en {int(espera)}s (intento {intento + 1}/{max_reintentos})..."
+                )
+                time.sleep(espera)
+                continue
+
+            if _es_error_de_cuota(e):
+                st.error(
+                    f"❌ Escena {id_escena}: se agotaron los reintentos por límite de cuota (429). "
+                    f"Si esto persiste, es cuota agotada (no un límite transitorio) — revisa tu plan "
+                    f"de facturación en https://ai.dev/rate-limit."
+                )
+                return None
+
+            st.error(f"Error generando render para la escena {id_escena}: {e}")
+            return None
+
+    return None
 
 
 def ejecutar_pipeline_agencia(storyboard_json):
