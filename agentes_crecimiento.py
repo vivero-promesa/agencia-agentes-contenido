@@ -104,6 +104,62 @@ Responde únicamente con los campos del schema solicitado.
     return CampanaWhatsApp.model_validate_json(json_res) if json_res else None
 
 
+def generar_seo_por_intencion(cluster_busqueda: str, dolores_intermediarios: str = None, prioridad_estrategica: str = None):
+    """
+    SEO PROACTIVO por intención de búsqueda — a diferencia de
+    generar_seo_desde_inventario (reactivo, solo escribe si hay stock real),
+    esta función escribe para capturar una búsqueda transaccional
+    (ej. "comprar palmas botella por lote en Bogotá") independientemente
+    de si hay inventario disponible hoy. Construye autoridad temática
+    (Topical Authority) para cuando sí haya stock.
+
+    cluster_busqueda: la intención/keyword objetivo, en lenguaje natural.
+    dolores_intermediarios: opcional, texto escrito a mano (no generado por
+    IA) sobre los dolores del viverista/comprador frente a intermediarios
+    tradicionales — el agente lo usa como contexto si es relevante, nunca
+    inventa dolores o competidores por su cuenta.
+    """
+    dolores_texto = (
+        f"\n\nCONTEXTO — dolores frente a intermediarios tradicionales (usar solo si es relevante al tema, nunca inventar más allá de esto):\n{dolores_intermediarios}\n"
+        if dolores_intermediarios else ""
+    )
+    prioridad_texto = (
+        f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
+        if prioridad_estrategica else ""
+    )
+    prompt_intencion = f"""
+{IDENTIDAD_COMPACTA}
+{dolores_texto}{prioridad_texto}
+Eres el Estratega SEO B2B de ViveroOnline. Vas a escribir un artículo
+optimizado para capturar esta intención de búsqueda transaccional:
+
+CLUSTER / INTENCIÓN DE BÚSQUEDA OBJETIVO: {cluster_busqueda}
+
+Este artículo es PROACTIVO: no depende de un lote de inventario específico
+— existe para posicionar a ViveroOnline como autoridad en este tema/producto
+antes de que el comprador busque, y para capturar la búsqueda aunque hoy no
+haya stock exacto disponible.
+
+Estructura obligatoria (framework PAS):
+1. PROBLEMA (H2): el reto real que enfrenta un comprador institucional
+   buscando exactamente esto.
+2. AGITACIÓN (párrafo): por qué resolverlo mal cuesta tiempo/dinero/riesgo
+   (sin exagerar ni inventar cifras).
+3. SOLUCIÓN (H2/H3): cómo ViveroOnline resuelve esta necesidad como
+   categoría — sin prometer un lote específico si no lo tienes confirmado.
+4. RESPALDO LOGÍSTICO (H3): cómo se coordina el despacho de planta viva en
+   general (sin inventar detalles de un pedido específico).
+5. CTA: invitación a dejar el requerimiento/cotizar disponibilidad en
+   ViveroOnline — nunca prometas stock inmediato que no está confirmado.
+
+Formato: Markdown limpio, tono profesional pero humano — nunca corporativo
+frío ni con lenguaje de urgencia. Nunca inventes cifras, alianzas o clientes.
+Responde únicamente con los campos del schema solicitado.
+"""
+    json_res = invocar_modelo_seguro(prompt_intencion, ArticuloSEO, 0.3)
+    return ArticuloSEO.model_validate_json(json_res) if json_res else None
+
+
 def generar_seo_desde_inventario(datos: dict, prioridad_estrategica: str = None):
     """
     Genera un artículo SEO B2B a partir de un lote de inventario, usando el
