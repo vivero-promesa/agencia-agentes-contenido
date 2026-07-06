@@ -23,7 +23,7 @@ except Exception as e:
 
 from agente_audio import generar_audio_elevenlabs
 from agente_video import ejecutar_pipeline_agencia
-from competencia import analizar_contra_competencia
+from competencia import analizar_contra_competencia, proponer_estrategia_desde_competencia
 from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS, CLAVE_ESTRATEGIA_COMPETITIVA, cluster_ya_ejecutado, registrar_cluster_ejecutado
 
 # ==========================================
@@ -678,6 +678,79 @@ with tab_competencia:
                 st.success("Estrategia competitiva actualizada.")
             else:
                 st.error("No se pudo guardar en Supabase.")
+
+    st.markdown("---")
+    st.subheader("🔗 Proponer Prioridad y Dolores desde esta Competencia")
+    st.caption(
+        "Genera un borrador de Prioridad y de Dolores razonando a partir de "
+        "lo que escribiste arriba — no se guarda solo. Lo revisas, lo editas "
+        "si quieres, y decides tú si lo mandas a la pestaña Estrategia. "
+        "Puedes regenerar tantas veces como quieras antes de guardar."
+    )
+
+    if st.button("🧠 Generar Propuesta desde la Competencia"):
+        if not st.session_state.estrategia_competitiva.strip():
+            st.warning("Primero escribe y guarda tu estrategia competitiva arriba.")
+        else:
+            with st.spinner("Razonando propuesta a partir de la competencia..."):
+                prioridad_prop, dolores_prop = proponer_estrategia_desde_competencia(
+                    st.session_state.estrategia_competitiva,
+                    prioridad_actual=st.session_state.prioridad_estrategica
+                )
+                if not prioridad_prop and not dolores_prop:
+                    st.error("No se pudo generar la propuesta (revisa la conexión con Groq).")
+                else:
+                    st.session_state.propuesta_prioridad = prioridad_prop
+                    st.session_state.propuesta_dolores = dolores_prop
+                    st.session_state.propuesta_generada = True
+                    st.rerun()
+
+    if st.session_state.get("propuesta_generada"):
+        st.markdown("**Propuesta de Prioridad** (editable antes de guardar):")
+        prioridad_editable = st.text_area(
+            "Prioridad propuesta:",
+            value=st.session_state.propuesta_prioridad,
+            height=120,
+            key="prioridad_editable_propuesta"
+        )
+        if st.button("💾 Guardar como Prioridad Actual"):
+            if not supabase_ag:
+                st.error("Falta la conexión a la Agencia.")
+            else:
+                ok = guardar_prioridad_estrategica(supabase_ag, prioridad_editable)
+                if ok:
+                    st.session_state.prioridad_estrategica = prioridad_editable
+                    st.success("Guardado como Prioridad Actual — ya la usan todos los agentes institucionales.")
+                else:
+                    st.error("No se pudo guardar en Supabase.")
+
+        st.markdown("**Propuesta de Dolores frente a Intermediarios** (editable antes de guardar):")
+        dolores_editable = st.text_area(
+            "Dolores propuestos:",
+            value=st.session_state.propuesta_dolores,
+            height=120,
+            key="dolores_editable_propuesta"
+        )
+        if st.button("💾 Guardar como Dolores frente a Intermediarios"):
+            if not supabase_ag:
+                st.error("Falta la conexión a la Agencia.")
+            else:
+                ok = guardar_prioridad_estrategica(supabase_ag, dolores_editable, clave=CLAVE_DOLORES_INTERMEDIARIOS)
+                if ok:
+                    st.session_state.dolores_intermediarios = dolores_editable
+                    st.success("Guardado como Dolores frente a Intermediarios — ya los usa el SEO proactivo.")
+                else:
+                    st.error("No se pudo guardar en Supabase.")
+
+        if st.button("🔄 Volver a generar (no me convence esta propuesta)"):
+            with st.spinner("Generando una nueva propuesta..."):
+                prioridad_prop, dolores_prop = proponer_estrategia_desde_competencia(
+                    st.session_state.estrategia_competitiva,
+                    prioridad_actual=st.session_state.prioridad_estrategica
+                )
+                st.session_state.propuesta_prioridad = prioridad_prop
+                st.session_state.propuesta_dolores = dolores_prop
+                st.rerun()
 
     st.markdown("---")
     test_comp = st.text_input("Generar pitch para:", placeholder="Ej: Palmas Botella por lote en Bogotá")
