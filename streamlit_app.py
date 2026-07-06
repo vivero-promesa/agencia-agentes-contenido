@@ -23,8 +23,8 @@ except Exception as e:
 
 from agente_audio import generar_audio_elevenlabs
 from agente_video import ejecutar_pipeline_agencia
-from competencia import analizar_contra_competencia, get_config_competencia
-from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS
+from competencia import analizar_contra_competencia
+from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS, CLAVE_ESTRATEGIA_COMPETITIVA, cluster_ya_ejecutado, registrar_cluster_ejecutado
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -115,6 +115,116 @@ with tab_estrategia:
                 st.success("Dolores actualizados. El SEO proactivo ya los usará como contexto.")
             else:
                 st.error("No se pudo guardar en Supabase.")
+
+    st.markdown("---")
+    st.subheader("🚀 Generar Campaña desde la Estrategia")
+    st.caption(
+        "Usa la Prioridad y los Dolores de arriba (guárdalos primero) más un "
+        "tema puntual, para generar Texto + WhatsApp + Video + SEO en un solo "
+        "clic — y guardarlo en el Historial, igual que hace la Campaña 360, "
+        "pero partiendo de la estrategia en vez del inventario."
+    )
+    tema_campana_estrategia = st.text_input(
+        "Tema / ángulo de la campaña:",
+        placeholder="Ej: Palmas Botella para constructoras en la Sabana de Bogotá",
+        key="tema_campana_estrategia"
+    )
+    audiencia_campana_estrategia = st.radio(
+        "Audiencia del WhatsApp:",
+        options=["institucional", "viverista"],
+        format_func=lambda x: "Comprador institucional" if x == "institucional" else "Viverista",
+        horizontal=True,
+        key="audiencia_campana_estrategia"
+    )
+    forzar_duplicado_estrategia = st.checkbox(
+        "Generar de todas formas aunque ya exista un artículo SEO para este tema (no recomendado — riesgo de competir contigo mismo en Google)",
+        key="forzar_duplicado_estrategia"
+    )
+
+    if st.button("⚡ Generar Campaña desde Estrategia", type="primary"):
+        if not supabase_ag:
+            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+        elif not tema_campana_estrategia:
+            st.warning("Escribe un tema o ángulo para la campaña.")
+        else:
+            cluster_existente = cluster_ya_ejecutado(supabase_ag, tema_campana_estrategia)
+            if cluster_existente and not forzar_duplicado_estrategia:
+                st.warning(
+                    f"⚠️ Ya generaste SEO para un tema igual o muy parecido "
+                    f"(\"{cluster_existente.get('cluster_original', tema_campana_estrategia)}\") "
+                    f"el {cluster_existente.get('fecha_creacion', 'anteriormente')}. "
+                    f"Generar otro artículo para el mismo tema compite contigo mismo en "
+                    f"buscadores (keyword cannibalization). Si de verdad quieres otro ángulo "
+                    f"distinto, marca la casilla de arriba para continuar."
+                )
+            else:
+                with st.spinner("Generando campaña completa a partir de la estrategia..."):
+                    try:
+                        prioridad_actual = st.session_state.prioridad_estrategica
+                        dolores_actuales = st.session_state.dolores_intermediarios
+
+                        texto_res = redactar_articulo_seo(tema_campana_estrategia, prioridad_estrategica=prioridad_actual)
+                        wa_res = generar_campana_whatsapp(
+                            tema_campana_estrategia,
+                            audiencia=audiencia_campana_estrategia,
+                            prioridad_estrategica=prioridad_actual
+                        )
+                        video_res = redactar_guion_viral(tema_campana_estrategia, prioridad_estrategica=prioridad_actual)
+                        seo_res = generar_seo_por_intencion(
+                            tema_campana_estrategia,
+                            dolores_intermediarios=dolores_actuales,
+                            prioridad_estrategica=prioridad_actual
+                        )
+
+                        # Guardado en Historial (misma tabla y esquema que Campaña 360)
+                        # estado: "borrador" — nada se considera aprobado/listo hasta
+                        # que se revise a mano en la pestaña Historial.
+                        registros = [
+                            {"tipo_contenido": "TEXTO", "titulo": tema_campana_estrategia, "contenido": texto_res or "", "estado": "borrador"},
+                            {"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp — {tema_campana_estrategia}", "contenido": wa_res.mensaje_texto if wa_res else "", "estado": "borrador"},
+                            {"tipo_contenido": "VIDEO", "titulo": f"Guion Video — {tema_campana_estrategia}", "contenido": video_res or "", "estado": "borrador"},
+                        ]
+                        if seo_res:
+                            registros.append({"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md, "estado": "borrador"})
+                            registrar_cluster_ejecutado(supabase_ag, tema_campana_estrategia)
+
+                        supabase_ag.table("historial_contenidos").insert(registros).execute()
+
+                        st.session_state.campana_estrategia_data = {
+                            "tema": tema_campana_estrategia,
+                            "texto": texto_res,
+                            "wa": wa_res,
+                            "video": video_res,
+                            "seo": seo_res,
+                        }
+                        st.session_state.campana_estrategia_lista = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error generando la campaña desde estrategia: {e}")
+
+    if st.session_state.get("campana_estrategia_lista"):
+        data = st.session_state.campana_estrategia_data
+        st.success(f"Campaña generada y guardada en el Historial — tema: {data['tema']}")
+
+        with st.expander("📝 Texto", expanded=True):
+            st.write(data["texto"])
+
+        with st.expander("💬 WhatsApp"):
+            if data["wa"]:
+                st.text_area("Copy:", value=data["wa"].mensaje_texto, height=100, key="ce_wa_copy")
+                st.text_area("Guion nota de voz:", value=data["wa"].guion_nota_voz, height=150, key="ce_wa_script")
+            else:
+                st.warning("El agente de WhatsApp no devolvió resultado.")
+
+        with st.expander("🎬 Video (concepto)"):
+            st.write(data["video"])
+
+        with st.expander("🚀 SEO Proactivo"):
+            if data["seo"]:
+                st.markdown(f"### {data['seo'].titulo_h1}")
+                st.markdown(data["seo"].contenido_md)
+            else:
+                st.warning("El agente de SEO no devolvió resultado.")
 
 
 
@@ -351,22 +461,45 @@ with tab_seo:
             "Cluster / intención de búsqueda objetivo:",
             placeholder="Ej: Comprar palmas botella por lote en Bogotá"
         )
+        forzar_duplicado_seo = st.checkbox(
+            "Generar de todas formas aunque ya exista un artículo para este cluster (no recomendado)",
+            key="forzar_duplicado_seo"
+        )
         if st.button("Generar Artículo Proactivo"):
-            if cluster_seo:
-                with st.spinner("Redactando artículo de intención de búsqueda..."):
-                    articulo = generar_seo_por_intencion(
-                        cluster_seo,
-                        dolores_intermediarios=st.session_state.dolores_intermediarios,
-                        prioridad_estrategica=st.session_state.prioridad_estrategica
-                    )
-                    if articulo:
-                        st.success("Artículo proactivo generado con éxito.")
-                        st.markdown(f"### {articulo.titulo_h1}")
-                        st.markdown(articulo.contenido_md)
-                    else:
-                        st.error("El motor de IA no devolvió un formato válido.")
-            else:
+            if not cluster_seo:
                 st.warning("Escribe el cluster o intención de búsqueda objetivo.")
+            else:
+                cluster_existente = cluster_ya_ejecutado(supabase_ag, cluster_seo) if supabase_ag else None
+                if cluster_existente and not forzar_duplicado_seo:
+                    st.warning(
+                        f"⚠️ Ya existe un artículo para un cluster igual o muy parecido "
+                        f"(\"{cluster_existente.get('cluster_original', cluster_seo)}\"), generado el "
+                        f"{cluster_existente.get('fecha_creacion', 'anteriormente')}. Generar otro compite "
+                        f"contigo mismo en buscadores (keyword cannibalization). Marca la casilla de "
+                        f"arriba si de verdad es un ángulo distinto."
+                    )
+                else:
+                    with st.spinner("Redactando artículo de intención de búsqueda..."):
+                        articulo = generar_seo_por_intencion(
+                            cluster_seo,
+                            dolores_intermediarios=st.session_state.dolores_intermediarios,
+                            prioridad_estrategica=st.session_state.prioridad_estrategica
+                        )
+                        if articulo:
+                            st.success("Artículo proactivo generado con éxito.")
+                            st.markdown(f"### {articulo.titulo_h1}")
+                            st.markdown(articulo.contenido_md)
+                            if supabase_ag:
+                                supabase_ag.table("historial_contenidos").insert({
+                                    "tipo_contenido": "SEO",
+                                    "titulo": articulo.titulo_h1,
+                                    "contenido": articulo.contenido_md,
+                                    "estado": "borrador"
+                                }).execute()
+                                registrar_cluster_ejecutado(supabase_ag, cluster_seo)
+                                st.caption("Guardado en el Historial como borrador.")
+                        else:
+                            st.error("El motor de IA no devolvió un formato válido.")
 
 # ==========================================
 # --- PESTAÑA 5: ORQUESTADOR 360 ---
@@ -415,9 +548,9 @@ with tab_360:
 
                         # 3. Guardado Histórico (AGENCIA)
                         supabase_ag.table("historial_contenidos").insert([
-                            {"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md},
-                            {"tipo_contenido": "WHATSAPP", "titulo": "Copy WhatsApp", "contenido": wa_res.mensaje_texto},
-                            {"tipo_contenido": "VIDEO", "titulo": "Guion Video", "contenido": video_res}
+                            {"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md, "estado": "borrador"},
+                            {"tipo_contenido": "WHATSAPP", "titulo": "Copy WhatsApp", "contenido": wa_res.mensaje_texto, "estado": "borrador"},
+                            {"tipo_contenido": "VIDEO", "titulo": "Guion Video", "contenido": video_res, "estado": "borrador"}
                         ]).execute()
 
                         # 4. Cierre de Candado Anti-Duplicidad (AGENCIA)
@@ -469,6 +602,14 @@ with tab_360:
 # ==========================================
 with tab_historial:
     st.subheader("📜 Historial de Contenido Generado")
+    st.caption(
+        "Todo lo generado nace como 'borrador'. Márcalo como 'aprobado' una "
+        "vez lo revisaste y de verdad lo vas a usar — eso es lo que separa "
+        "lo que tiene valor real de lo que fue solo una prueba. Cuando "
+        "sepas si una pieza generó una venta, márcalo también: es la única "
+        "forma de empezar a conectar contenido con resultado real, mientras "
+        "no haya una medición automática."
+    )
     if not supabase_ag:
         st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
     else:
@@ -478,8 +619,31 @@ with tab_historial:
                 st.info("Aún no hay contenido en el historial. Lanza una Campaña 360 para empezar.")
             else:
                 for item in res.data:
-                    with st.expander(f"{item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')}"):
+                    estado_item = item.get("estado", "borrador") or "borrador"
+                    genero_venta_item = item.get("genero_venta")
+                    icono_estado = "✅" if estado_item == "aprobado" else "📝"
+                    with st.expander(f"{icono_estado} {item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')} | estado: {estado_item}"):
                         st.markdown(item.get('contenido', ''))
+                        st.markdown("---")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if estado_item != "aprobado":
+                                if st.button("✅ Marcar como aprobado", key=f"aprobar_{item['id']}"):
+                                    supabase_ag.table("historial_contenidos").update({"estado": "aprobado"}).eq("id", item["id"]).execute()
+                                    st.rerun()
+                            else:
+                                st.caption("✅ Aprobado")
+                        with col_b:
+                            nuevo_resultado = st.selectbox(
+                                "¿Generó una venta?",
+                                options=["Sin dato", "Sí", "No"],
+                                index={"Sin dato": 0, True: 1, False: 2}.get(genero_venta_item, 0) if genero_venta_item is not None else 0,
+                                key=f"venta_{item['id']}"
+                            )
+                            if st.button("Guardar resultado", key=f"guardar_venta_{item['id']}"):
+                                valor_venta = {"Sin dato": None, "Sí": True, "No": False}[nuevo_resultado]
+                                supabase_ag.table("historial_contenidos").update({"genero_venta": valor_venta}).eq("id", item["id"]).execute()
+                                st.rerun()
         except Exception as e:
             st.error(f"❌ Error técnico real: {e}")
 
@@ -487,19 +651,47 @@ with tab_historial:
 # --- PESTAÑA 7: COMPETENCIA ---
 # ==========================================
 with tab_competencia:
-    st.subheader("🧠 Cerebro Competitivo")
-    try:
-        st.write(get_config_competencia())
-    except Exception as e:
-        st.warning(f"No se pudo cargar la configuración de competencia: {e}")
+    st.subheader("🧠 Estrategia Competitiva")
+    st.caption(
+        "Escribe aquí a mano quiénes son tus competidores reales y en qué "
+        "eres mejor — a propósito, ningún agente lo genera automáticamente, "
+        "para no inventar competidores que no existen. Esto se guarda en "
+        "Supabase (antes se perdía al recargar la página)."
+    )
 
-    test_comp = st.text_input("Probar contra:", placeholder="Ej: Vivero tradicional de la 80 con precios bajos")
+    if "estrategia_competitiva" not in st.session_state:
+        st.session_state.estrategia_competitiva = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_ESTRATEGIA_COMPETITIVA)
+
+    nueva_estrategia_competitiva = st.text_area(
+        "Estrategia competitiva:",
+        value=st.session_state.estrategia_competitiva,
+        height=200,
+        placeholder="Ej: Vivero X — fuerte en precio, débil en puntualidad logística. Nuestra ventaja: entrega garantizada en menos de 48h."
+    )
+    if st.button("💾 Guardar Estrategia Competitiva"):
+        if not supabase_ag:
+            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+        else:
+            ok = guardar_prioridad_estrategica(supabase_ag, nueva_estrategia_competitiva, clave=CLAVE_ESTRATEGIA_COMPETITIVA)
+            if ok:
+                st.session_state.estrategia_competitiva = nueva_estrategia_competitiva
+                st.success("Estrategia competitiva actualizada.")
+            else:
+                st.error("No se pudo guardar en Supabase.")
+
+    st.markdown("---")
+    test_comp = st.text_input("Generar pitch para:", placeholder="Ej: Palmas Botella por lote en Bogotá")
     if st.button("Generar Pitch Competitivo"):
         if test_comp:
             with st.spinner("Analizando ventaja competitiva..."):
                 try:
-                    st.write(analizar_contra_competencia(test_comp))
+                    resultado_pitch = analizar_contra_competencia(
+                        test_comp,
+                        estrategia_competitiva=st.session_state.estrategia_competitiva,
+                        prioridad_estrategica=st.session_state.prioridad_estrategica
+                    )
+                    st.write(resultado_pitch)
                 except Exception as e:
                     st.error(f"Error técnico: {e}")
         else:
-            st.warning("Ingresa un competidor o escenario para analizar.")
+            st.warning("Ingresa un tema o producto para generar el pitch.")
