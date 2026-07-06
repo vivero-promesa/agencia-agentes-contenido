@@ -60,8 +60,8 @@ if "dolores_intermediarios" not in st.session_state:
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
 # ==========================================
-tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360, tab_historial, tab_competencia, tab_estrategia = st.tabs([
-    "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "🔥 Campaña 360", "📜 Historial", "🧠 Competencia", "⚙️ Estrategia"
+tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp, tab_video, tab_seo, tab_historial = st.tabs([
+    "🧠 Competencia", "⚙️ Estrategia", "🔥 Campaña 360", "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "📜 Historial"
 ])
 
 # ==========================================
