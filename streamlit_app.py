@@ -9,6 +9,7 @@ from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inve
 from agente_audio import generar_audio_elevenlabs
 from agente_video import ejecutar_pipeline_agencia
 from competencia import analizar_contra_competencia, get_config_competencia
+from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -31,12 +32,46 @@ url_ag = st.secrets.get("SUPABASE_URL_AGENCIA")
 key_ag = st.secrets.get("SUPABASE_KEY_AGENCIA")
 supabase_ag = create_client(url_ag, key_ag) if url_ag and key_ag else None
 
+# Prioridad estratégica dinámica (ej. "generar transacciones reales") — se
+# lee una vez al cargar la app y se usa en todos los agentes institucionales.
+if "prioridad_estrategica" not in st.session_state:
+    st.session_state.prioridad_estrategica = obtener_prioridad_estrategica(supabase_ag)
+
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
 # ==========================================
-tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360, tab_historial, tab_competencia = st.tabs([
-    "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "🔥 Campaña 360", "📜 Historial", "🧠 Competencia"
+tab_texto, tab_whatsapp, tab_video, tab_seo, tab_360, tab_historial, tab_competencia, tab_estrategia = st.tabs([
+    "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "🔥 Campaña 360", "📜 Historial", "🧠 Competencia", "⚙️ Estrategia"
 ])
+
+# ==========================================
+# --- PESTAÑA NUEVA: ESTRATEGIA ---
+# ==========================================
+with tab_estrategia:
+    st.subheader("Prioridad Estratégica Actual")
+    st.caption(
+        "Esto no reemplaza el tono de marca (identidad_marca.py) ni la "
+        "identidad visual (brand_book.py) — es el énfasis de negocio del "
+        "momento (ej. \"generar transacciones reales\") que ajusta el CTA "
+        "de los agentes orientados al mercado institucional."
+    )
+    nueva_prioridad = st.text_area(
+        "Prioridad actual:",
+        value=st.session_state.prioridad_estrategica,
+        height=150
+    )
+    if st.button("💾 Guardar Prioridad"):
+        if not supabase_ag:
+            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+        else:
+            ok = guardar_prioridad_estrategica(supabase_ag, nueva_prioridad)
+            if ok:
+                st.session_state.prioridad_estrategica = nueva_prioridad
+                st.success("Prioridad estratégica actualizada. Los próximos contenidos ya la usarán.")
+            else:
+                st.error("No se pudo guardar en Supabase. Revisa que la tabla configuracion_estrategica exista.")
+
+
 
 # ==========================================
 # --- PESTAÑA 1: TEXTOS ---
@@ -49,7 +84,7 @@ with tab_texto:
         if tema_texto:
             with st.spinner("El agente está redactando..."):
                 try:
-                    resultado_texto = redactar_articulo_seo(tema_texto)
+                    resultado_texto = redactar_articulo_seo(tema_texto, prioridad_estrategica=st.session_state.prioridad_estrategica)
                     if resultado_texto:
                         st.success("Texto generado con éxito.")
                         st.write(resultado_texto)
@@ -76,7 +111,7 @@ with tab_whatsapp:
     if st.button("Generar Kit de WhatsApp"):
         if obj_wa:
             with st.spinner("Conectando con Agente de Crecimiento..."):
-                campana = generar_campana_whatsapp(obj_wa, audiencia=audiencia_wa)
+                campana = generar_campana_whatsapp(obj_wa, audiencia=audiencia_wa, prioridad_estrategica=st.session_state.prioridad_estrategica)
                 if campana:
                     st.session_state.wa_copy = campana.mensaje_texto
                     st.session_state.wa_script = campana.guion_nota_voz
@@ -114,7 +149,7 @@ with tab_video:
             if tema_video:
                 with st.spinner("Estructurando tomas, guion y copy para redes..."):
                     try:
-                        resultado_video = redactar_guion_viral(tema_video)
+                        resultado_video = redactar_guion_viral(tema_video, prioridad_estrategica=st.session_state.prioridad_estrategica)
                         st.success("Concepto generado. Úsalo como inspiración para tu Storyboard.")
                         st.write(resultado_video)
                     except Exception as e:
@@ -220,7 +255,7 @@ with tab_seo:
                                 "vendedor": nombre_vivero
                             }
 
-                            articulo = generar_seo_desde_inventario(datos_auto)
+                            articulo = generar_seo_desde_inventario(datos_auto, prioridad_estrategica=st.session_state.prioridad_estrategica)
                             if articulo:
                                 st.success("¡Artículo estratégico B2B generado con éxito!")
                                 st.markdown(f"### {articulo.titulo_h1}")
@@ -248,7 +283,7 @@ with tab_seo:
                         "ubicacion": man_ubicacion,
                         "vendedor": man_vendedor
                     }
-                    articulo = generar_seo_desde_inventario(datos_manuales)
+                    articulo = generar_seo_desde_inventario(datos_manuales, prioridad_estrategica=st.session_state.prioridad_estrategica)
                     if articulo:
                         st.success("Artículo manual generado exitosamente.")
                         st.markdown(f"### {articulo.titulo_h1}")
@@ -297,9 +332,9 @@ with tab_360:
                         datos = {"especie": nombre_especie, "cantidad": item["stock"], "ubicacion": locacion, "vendedor": nombre_vivero}
 
                         # 2. Ejecutar Agentes
-                        seo_res = generar_seo_desde_inventario(datos)
-                        wa_res = generar_campana_whatsapp(f"Vender lote disponible de {item['stock']} {nombre_especie} en {locacion}.", audiencia="institucional")
-                        video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {nombre_especie} en {locacion}.")
+                        seo_res = generar_seo_desde_inventario(datos, prioridad_estrategica=st.session_state.prioridad_estrategica)
+                        wa_res = generar_campana_whatsapp(f"Vender lote disponible de {item['stock']} {nombre_especie} en {locacion}.", audiencia="institucional", prioridad_estrategica=st.session_state.prioridad_estrategica)
+                        video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {nombre_especie} en {locacion}.", prioridad_estrategica=st.session_state.prioridad_estrategica)
 
                         # 3. Guardado Histórico (AGENCIA)
                         supabase_ag.table("historial_contenidos").insert([
