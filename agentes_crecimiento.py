@@ -43,7 +43,7 @@ def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
     return None
 
 
-def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional"):
+def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional", prioridad_estrategica: str = None):
     """
     Genera un kit de WhatsApp (mensaje de texto + guion de nota de voz).
 
@@ -53,6 +53,11 @@ def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audien
       - "viverista": productor. Discurso "frente al viverista" — onboarding,
         activación o resolver una duda sobre el marketplace. Lenguaje simple,
         cero tecnicismos, nunca hacerlo sentir atrasado.
+
+    prioridad_estrategica: solo aplica al discurso institucional — una
+    prioridad de negocio dinámica (ej. "generar transacciones reales") que
+    ajusta el CTA. No se usa en el discurso viverista, donde el objetivo es
+    onboarding/confianza, no cierre de venta.
     """
     if audiencia == "viverista":
         instrucciones_audiencia = """
@@ -63,12 +68,16 @@ El objetivo suele ser onboarding, activación en el marketplace o resolver
 una duda — no una venta.
 """
     else:
-        instrucciones_audiencia = """
+        prioridad_texto = (
+            f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
+            if prioridad_estrategica else ""
+        )
+        instrucciones_audiencia = f"""
 Le escribes a un COMPRADOR INSTITUCIONAL (paisajista, constructora,
 arquitecto). Usa el discurso "frente al mercado" de la identidad de marca:
 profesional pero cercano, nunca corporativo frío. El objetivo suele ser
 captación o cierre de una venta concreta.
-"""
+{prioridad_texto}"""
 
     prompt_wa = f"""
 {IDENTIDAD_COMPACTA}
@@ -95,15 +104,19 @@ Responde únicamente con los campos del schema solicitado.
     return CampanaWhatsApp.model_validate_json(json_res) if json_res else None
 
 
-def generar_seo_desde_inventario(datos: dict):
+def generar_seo_desde_inventario(datos: dict, prioridad_estrategica: str = None):
     """
     Genera un artículo SEO B2B a partir de un lote de inventario, usando el
     framework PAS (Problema, Agitación, Solución) y el discurso institucional
     ("frente al mercado") de la identidad de marca.
     """
+    prioridad_texto = (
+        f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
+        if prioridad_estrategica else ""
+    )
     prompt_b2b = f"""
 {IDENTIDAD_COMPACTA}
-
+{prioridad_texto}
 Eres el Estratega SEO B2B de ViveroOnline. Vas a escribir un artículo
 optimizado para compradores institucionales (paisajistas, constructoras,
 arquitectos) a partir de este lote real de inventario:
