@@ -5,11 +5,11 @@ from supabase import create_client, Client
 
 # Importaciones de agentes
 from agente import redactar_guion_viral, redactar_articulo_seo
-from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario
+from agentes_crecimiento import generar_campana_whatsapp, generar_seo_desde_inventario, generar_seo_por_intencion
 from agente_audio import generar_audio_elevenlabs
 from agente_video import ejecutar_pipeline_agencia
 from competencia import analizar_contra_competencia, get_config_competencia
-from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica
+from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -36,6 +36,11 @@ supabase_ag = create_client(url_ag, key_ag) if url_ag and key_ag else None
 # lee una vez al cargar la app y se usa en todos los agentes institucionales.
 if "prioridad_estrategica" not in st.session_state:
     st.session_state.prioridad_estrategica = obtener_prioridad_estrategica(supabase_ag)
+
+# Dolores del viverista frente a intermediarios — escrito a mano por el
+# usuario (no generado por IA), se lee una vez al cargar la app.
+if "dolores_intermediarios" not in st.session_state:
+    st.session_state.dolores_intermediarios = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_DOLORES_INTERMEDIARIOS)
 
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
@@ -70,6 +75,31 @@ with tab_estrategia:
                 st.success("Prioridad estratégica actualizada. Los próximos contenidos ya la usarán.")
             else:
                 st.error("No se pudo guardar en Supabase. Revisa que la tabla configuracion_estrategica exista.")
+
+    st.markdown("---")
+    st.subheader("Dolores del Viverista frente a Intermediarios Tradicionales")
+    st.caption(
+        "Escribe esto a mano — a propósito, ningún agente lo genera "
+        "automáticamente, para no inventar quejas o competidores que no son "
+        "reales. Los agentes de SEO lo usan como contexto cuando el tema lo "
+        "amerita."
+    )
+    nuevos_dolores = st.text_area(
+        "Dolores frente a intermediarios:",
+        value=st.session_state.dolores_intermediarios,
+        height=150,
+        placeholder="Ej: El viverista pierde entre 30-40% del margen con intermediarios que no aportan logística ni visibilidad real..."
+    )
+    if st.button("💾 Guardar Dolores"):
+        if not supabase_ag:
+            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+        else:
+            ok = guardar_prioridad_estrategica(supabase_ag, nuevos_dolores, clave=CLAVE_DOLORES_INTERMEDIARIOS)
+            if ok:
+                st.session_state.dolores_intermediarios = nuevos_dolores
+                st.success("Dolores actualizados. El SEO proactivo ya los usará como contexto.")
+            else:
+                st.error("No se pudo guardar en Supabase.")
 
 
 
@@ -205,7 +235,11 @@ with tab_video:
 with tab_seo:
     st.subheader("Trigger SEO: Generador de Artículos B2B")
 
-    modo_seo = st.radio("Modo de operación:", ["📡 Automatizado (Base de Datos)", "✍️ Ingreso Manual"], horizontal=True)
+    modo_seo = st.radio(
+        "Modo de operación:",
+        ["📡 Automatizado (Base de Datos)", "✍️ Ingreso Manual", "🎯 Proactivo (Intención de Búsqueda)"],
+        horizontal=True
+    )
 
     if modo_seo == "📡 Automatizado (Base de Datos)":
         if st.button("Analizar BD y Generar SEO"):
@@ -265,7 +299,7 @@ with tab_seo:
                     except Exception as e:
                         st.error(f"Error en la consulta automática: {e}")
 
-    else:
+    elif modo_seo == "✍️ Ingreso Manual":
         col1, col2 = st.columns(2)
         with col1:
             man_especie = st.text_input("Especie de planta:", placeholder="Ej: Palma Areca")
@@ -290,6 +324,34 @@ with tab_seo:
                         st.markdown(articulo.contenido_md)
             else:
                 st.warning("Completa los campos requeridos para proceder.")
+
+    else:
+        st.caption(
+            "SEO PROACTIVO: escribe para capturar una búsqueda transaccional "
+            "(ej. \"comprar palmas botella por lote en Bogotá\") aunque hoy no "
+            "tengas ese stock exacto — construye autoridad temática para "
+            "cuando sí lo tengas. No depende del inventario."
+        )
+        cluster_seo = st.text_input(
+            "Cluster / intención de búsqueda objetivo:",
+            placeholder="Ej: Comprar palmas botella por lote en Bogotá"
+        )
+        if st.button("Generar Artículo Proactivo"):
+            if cluster_seo:
+                with st.spinner("Redactando artículo de intención de búsqueda..."):
+                    articulo = generar_seo_por_intencion(
+                        cluster_seo,
+                        dolores_intermediarios=st.session_state.dolores_intermediarios,
+                        prioridad_estrategica=st.session_state.prioridad_estrategica
+                    )
+                    if articulo:
+                        st.success("Artículo proactivo generado con éxito.")
+                        st.markdown(f"### {articulo.titulo_h1}")
+                        st.markdown(articulo.contenido_md)
+                    else:
+                        st.error("El motor de IA no devolvió un formato válido.")
+            else:
+                st.warning("Escribe el cluster o intención de búsqueda objetivo.")
 
 # ==========================================
 # --- PESTAÑA 5: ORQUESTADOR 360 ---
