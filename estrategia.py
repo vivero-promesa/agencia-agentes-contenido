@@ -21,6 +21,7 @@ Claves en uso:
 
 CLAVE_PRIORIDAD_DEFAULT = "prioridad_actual"
 CLAVE_DOLORES_INTERMEDIARIOS = "dolores_intermediarios"
+CLAVE_ESTRATEGIA_COMPETITIVA = "estrategia_competitiva"
 
 VALOR_FALLBACK_PRIORIDAD = (
     "Posicionamiento de categoría (Océano Azul): ViveroOnline es la "
@@ -30,10 +31,12 @@ VALOR_FALLBACK_PRIORIDAD = (
 )
 
 VALOR_FALLBACK_DOLORES = ""  # vacío a propósito: si no se ha escrito nada, ningún agente debe inventar dolores/competidores
+VALOR_FALLBACK_COMPETENCIA = ""  # vacío a propósito: nunca inventar competidores — si está vacío, el agente debe decirlo, no inventar "Vivero X"
 
 _FALLBACKS_POR_CLAVE = {
     CLAVE_PRIORIDAD_DEFAULT: VALOR_FALLBACK_PRIORIDAD,
     CLAVE_DOLORES_INTERMEDIARIOS: VALOR_FALLBACK_DOLORES,
+    CLAVE_ESTRATEGIA_COMPETITIVA: VALOR_FALLBACK_COMPETENCIA,
 }
 
 
@@ -81,4 +84,63 @@ def guardar_prioridad_estrategica(supabase_client, valor: str, clave: str = CLAV
         return True
     except Exception as e:
         print(f"Error guardando estrategia en Supabase: {e}")
+        return False
+
+
+# --------------------------------------------------------------------------
+# Candado anti-duplicidad para SEO Proactivo (evita keyword cannibalization:
+# dos artículos distintos compitiendo por la misma búsqueda). Reutiliza el
+# mismo patrón de "candado" que ya usa el Orquestador 360 con
+# campanas_ejecutadas, pero para clusters de intención de búsqueda.
+#
+# Tabla esperada en el proyecto Supabase de la Agencia: clusters_seo_ejecutados
+#   - cluster_normalizado (text, primary key)
+#   - cluster_original (text)
+#   - fecha_creacion (timestamp)
+# --------------------------------------------------------------------------
+
+def normalizar_cluster(cluster: str) -> str:
+    """Normaliza un cluster de búsqueda para comparar de forma consistente
+    (minúsculas, sin espacios de más). No es matching difuso — es exacto
+    tras normalizar, suficiente y barato para evitar el caso obvio de
+    generar el mismo cluster dos veces."""
+    return " ".join(cluster.strip().lower().split())
+
+
+def cluster_ya_ejecutado(supabase_client, cluster: str):
+    """
+    Devuelve el registro existente (dict) si ya se generó contenido SEO para
+    este cluster, o None si es nuevo / si no hay cliente. Ante error de
+    conexión, devuelve None (no bloquea la generación por un problema de red).
+    """
+    if not supabase_client:
+        return None
+
+    try:
+        resp = (
+            supabase_client.table("clusters_seo_ejecutados")
+            .select("*")
+            .eq("cluster_normalizado", normalizar_cluster(cluster))
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+    except Exception as e:
+        print(f"Error consultando clusters_seo_ejecutados: {e}")
+        return None
+
+
+def registrar_cluster_ejecutado(supabase_client, cluster: str) -> bool:
+    """Registra un cluster como ya ejecutado, para que no se repita a futuro."""
+    if not supabase_client:
+        return False
+
+    try:
+        supabase_client.table("clusters_seo_ejecutados").insert({
+            "cluster_normalizado": normalizar_cluster(cluster),
+            "cluster_original": cluster,
+        }).execute()
+        return True
+    except Exception as e:
+        print(f"Error registrando cluster ejecutado: {e}")
         return False
