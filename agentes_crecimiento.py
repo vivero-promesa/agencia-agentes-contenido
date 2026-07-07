@@ -23,6 +23,13 @@ class ArticuloSEO(BaseModel):
     meta_description: str = Field(description="Meta descripción orientada a conversión.")
     contenido_md: str = Field(description="Contenido completo en Markdown impecable.")
 
+# NUEVO: Esquema estricto para Google Ads
+class CampanaGoogleAds(BaseModel):
+    keywords_positivas: list[str] = Field(description="Lista de 10-15 palabras clave de alta intención de compra.")
+    keywords_negativas: list[str] = Field(description="Lista de 5-10 exclusiones críticas para evitar tráfico basura o cruces.")
+    titulos: list[str] = Field(description="Mínimo 5 opciones de títulos persuasivos. Máximo 30 caracteres por título.")
+    descripciones: list[str] = Field(description="Mínimo 3 opciones de descripciones. Máximo 90 caracteres por descripción.")
+
 
 def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
     modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
@@ -46,18 +53,6 @@ def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
 def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional", prioridad_estrategica: str = None):
     """
     Genera un kit de WhatsApp (mensaje de texto + guion de nota de voz).
-
-    audiencia:
-      - "institucional" (default): comprador (paisajista, constructora,
-        arquitecto). Discurso "frente al mercado" — captación o cierre de venta.
-      - "viverista": productor. Discurso "frente al viverista" — onboarding,
-        activación o resolver una duda sobre el marketplace. Lenguaje simple,
-        cero tecnicismos, nunca hacerlo sentir atrasado.
-
-    prioridad_estrategica: solo aplica al discurso institucional — una
-    prioridad de negocio dinámica (ej. "generar transacciones reales") que
-    ajusta el CTA. No se usa en el discurso viverista, donde el objetivo es
-    onboarding/confianza, no cierre de venta.
     """
     if audiencia == "viverista":
         instrucciones_audiencia = """
@@ -104,20 +99,10 @@ Responde únicamente con los campos del schema solicitado.
     return CampanaWhatsApp.model_validate_json(json_res) if json_res else None
 
 
-def generar_seo_por_intencion(cluster_busqueda: str, dolores_intermediarios: str = None, prioridad_estrategica: str = None):
+def generar_seo_por_intencion(cluster_busqueda: str, dolores_intermediarios: str = None, prioridad_estrategica: str = None, insights_pauta_data: dict = None):
     """
-    SEO PROACTIVO por intención de búsqueda — a diferencia de
-    generar_seo_desde_inventario (reactivo, solo escribe si hay stock real),
-    esta función escribe para capturar una búsqueda transaccional
-    (ej. "comprar palmas botella por lote en Bogotá") independientemente
-    de si hay inventario disponible hoy. Construye autoridad temática
-    (Topical Authority) para cuando sí haya stock.
-
-    cluster_busqueda: la intención/keyword objetivo, en lenguaje natural.
-    dolores_intermediarios: opcional, texto escrito a mano (no generado por
-    IA) sobre los dolores del viverista/comprador frente a intermediarios
-    tradicionales — el agente lo usa como contexto si es relevante, nunca
-    inventa dolores o competidores por su cuenta.
+    SEO PROACTIVO por intención de búsqueda. 
+    Ahora incluye la inyección de palabras clave generadas por Google Ads.
     """
     dolores_texto = (
         f"\n\nCONTEXTO — dolores frente a intermediarios tradicionales (usar solo si es relevante al tema, nunca inventar más allá de esto):\n{dolores_intermediarios}\n"
@@ -127,9 +112,18 @@ def generar_seo_por_intencion(cluster_busqueda: str, dolores_intermediarios: str
         f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
         if prioridad_estrategica else ""
     )
+    
+    contexto_pauta = ""
+    if insights_pauta_data:
+        keywords_inyectadas = ", ".join(insights_pauta_data.get("keywords_positivas", []))
+        contexto_pauta = f"""
+\n[ALIMENTACIÓN DE ADS]: Este artículo debe posicionar orgánicamente términos que estamos pagando en pauta.
+Integra de forma completamente natural las siguientes palabras clave dentro de los textos y encabezados H2/H3: {keywords_inyectadas}.
+"""
+
     prompt_intencion = f"""
 {IDENTIDAD_COMPACTA}
-{dolores_texto}{prioridad_texto}
+{dolores_texto}{prioridad_texto}{contexto_pauta}
 Eres el Estratega SEO B2B de ViveroOnline. Vas a escribir un artículo
 optimizado para capturar esta intención de búsqueda transaccional:
 
@@ -162,9 +156,7 @@ Responde únicamente con los campos del schema solicitado.
 
 def generar_seo_desde_inventario(datos: dict, prioridad_estrategica: str = None):
     """
-    Genera un artículo SEO B2B a partir de un lote de inventario, usando el
-    framework PAS (Problema, Agitación, Solución) y el discurso institucional
-    ("frente al mercado") de la identidad de marca.
+    Genera un artículo SEO B2B a partir de un lote de inventario.
     """
     prioridad_texto = (
         f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
@@ -197,3 +189,60 @@ schema solicitado.
 """
     json_res = invocar_modelo_seguro(prompt_b2b, ArticuloSEO, 0.3)
     return ArticuloSEO.model_validate_json(json_res) if json_res else None
+
+
+# NUEVA FUNCIÓN: Agente de Pauta que persiste datos en Supabase
+def generar_y_guardar_pauta(objetivo: str, modo: str, supabase_client) -> dict:
+    """
+    Genera la estrategia de Google Ads usando Gemini y la persiste en Supabase
+    para que el agente SEO pueda alimentarse de ella. Retorna un dict con el resultado o None si falla.
+    """
+    if not supabase_client:
+        print("Error: Cliente de Supabase no proporcionado.")
+        return None
+
+    if modo == "B2B":
+        contexto_marca = "Enfoque institucional B2B (constructoras, paisajistas). Tono profesional, enfocado en volumen, logística y rentabilidad en la Sabana de Bogotá."
+    else:
+        contexto_marca = "Enfoque minorista B2C (consumidor final, venta de materas y decoración). Tono cercano, emocional, enfocado en diseño y estética para el hogar."
+
+    prompt_pauta = f"""
+{IDENTIDAD_COMPACTA}
+
+Eres el Director de Performance y Growth Marketing de ViveroOnline. 
+Tu tarea es diseñar una campaña de Google Ads optimizada para el siguiente objetivo:
+"{objetivo}"
+
+Contexto operativo de esta campaña: {contexto_marca}
+
+Reglas estrictas de validación de Google Ads:
+1. Ningún título puede superar los 30 caracteres. Si te pasas de 30 caracteres, la campaña fallará.
+2. Ninguna descripción puede superar los 90 caracteres. Si te pasas, fallará.
+3. Las keywords negativas deben bloquear activamente el mercado contrario (si es B2B, bloquea búsquedas minoristas tipo "para mi casa"; si es B2C, bloquea palabras corporativas tipo "por mayor").
+
+Responde únicamente con los campos del schema solicitado.
+"""
+    
+    json_res = invocar_modelo_seguro(prompt_pauta, CampanaGoogleAds, 0.3)
+    
+    if json_res:
+        datos_campana = CampanaGoogleAds.model_validate_json(json_res)
+        
+        registro = {
+            "modo": modo,
+            "keyword_objetivo": objetivo,
+            "keywords_positivas": datos_campana.keywords_positivas,
+            "keywords_negativas": datos_campana.keywords_negativas,
+            "titulos_anuncio": datos_campana.titulos,
+            "descripciones_anuncio": datos_campana.descripciones,
+            "estado": "pendiente_uso_seo"
+        }
+        
+        try:
+            supabase_client.table("insights_pauta").insert(registro).execute()
+            return registro
+        except Exception as e:
+            print(f"Error al guardar en Supabase: {e}")
+            return None
+            
+    return None
