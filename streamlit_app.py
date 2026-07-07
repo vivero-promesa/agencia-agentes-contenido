@@ -670,7 +670,8 @@ with tab_historial:
         "lo que tiene valor real de lo que fue solo una prueba. Cuando "
         "sepas si una pieza generó una venta, márcalo también: es la única "
         "forma de empezar a conectar contenido con resultado real, mientras "
-        "no haya una medición automática."
+        "no haya una medición automática. También puedes editar el texto "
+        "directamente aquí antes de aprobarlo, o eliminar lo que no sirva."
     )
     if not supabase_ag:
         st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
@@ -685,7 +686,27 @@ with tab_historial:
                     genero_venta_item = item.get("genero_venta")
                     icono_estado = "✅" if estado_item == "aprobado" else "📝"
                     with st.expander(f"{icono_estado} {item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')} | estado: {estado_item}"):
-                        st.markdown(item.get('contenido', ''))
+
+                        # --- Edición de título y contenido ---
+                        titulo_editado = st.text_input(
+                            "Título:",
+                            value=item.get("titulo", ""),
+                            key=f"titulo_{item['id']}"
+                        )
+                        contenido_editado = st.text_area(
+                            "Contenido:",
+                            value=item.get("contenido", ""),
+                            height=250,
+                            key=f"contenido_{item['id']}"
+                        )
+                        if st.button("💾 Guardar cambios", key=f"guardar_edicion_{item['id']}"):
+                            supabase_ag.table("historial_contenidos").update({
+                                "titulo": titulo_editado,
+                                "contenido": contenido_editado
+                            }).eq("id", item["id"]).execute()
+                            st.success("Cambios guardados.")
+                            st.rerun()
+
                         st.markdown("---")
                         col_a, col_b = st.columns(2)
                         with col_a:
@@ -706,6 +727,17 @@ with tab_historial:
                                 valor_venta = {"Sin dato": None, "Sí": True, "No": False}[nuevo_resultado]
                                 supabase_ag.table("historial_contenidos").update({"genero_venta": valor_venta}).eq("id", item["id"]).execute()
                                 st.rerun()
+
+                        # --- Eliminar, con confirmación para no borrar por accidente ---
+                        st.markdown("---")
+                        confirmar_borrado = st.checkbox(
+                            "Confirmar que quiero eliminar esto permanentemente",
+                            key=f"confirmar_borrar_{item['id']}"
+                        )
+                        if st.button("🗑️ Eliminar", key=f"eliminar_{item['id']}", disabled=not confirmar_borrado):
+                            supabase_ag.table("historial_contenidos").delete().eq("id", item["id"]).execute()
+                            st.success("Eliminado.")
+                            st.rerun()
         except Exception as e:
             st.error(f"❌ Error técnico real: {e}")
 
