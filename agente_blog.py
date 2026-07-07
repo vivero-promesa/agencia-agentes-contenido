@@ -3,6 +3,8 @@ import os
 import re
 from datetime import date
 from openai import OpenAI
+from google import genai
+from google.genai import types
 
 from identidad_marca import IDENTIDAD_COMPACTA
 
@@ -33,8 +35,8 @@ _MARCADORES_NICHO = ["sabana de bogotá", "msnm", "altiplano", "2.600", "2600"]
 
 def get_blog_client():
     """
-    Inicializa el cliente de forma segura solo cuando se va a generar un artículo.
-    Evita que la app colapse al arrancar.
+    Inicializa el cliente de Groq de forma segura solo cuando se va a
+    generar un artículo. Evita que la app colapse al arrancar.
     """
     try:
         api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
@@ -47,6 +49,47 @@ def get_blog_client():
     except Exception as e:
         print(f"Error cargando credenciales: {e}")
         return None
+
+
+def get_gemini_client():
+    """
+    Cliente de Google GenAI, usado SOLO para el FAQ (ver _generar_faq).
+    Groq/Llama 3.1 8B demostró en producción que no evita de forma
+    confiable copiar frases del cuerpo del artículo incluso con
+    instrucción explícita y reintento — Gemini 2.5 Flash es sensiblemente
+    mejor parafraseando sin copiar. El cuerpo del artículo se queda en
+    Groq (rápido/barato, y ahí sí funciona bien).
+    """
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        if not api_key:
+            return None
+        return genai.Client(api_key=api_key)
+    except Exception as e:
+        print(f"Error cargando credenciales de Gemini: {e}")
+        return None
+
+
+def _llamar_gemini(prompt_usuario, temperature=0.5):
+    """Llama a Gemini con fallback entre modelos, igual que hace
+    agentes_crecimiento.py. Devuelve None si no hay cliente o si fallan
+    ambos modelos — quien la llame debe tener un plan B (ver _generar_faq)."""
+    client = get_gemini_client()
+    if not client:
+        return None
+
+    contenido_completo = f"{PROMPT_SISTEMA_MAESTRO}\n\n{prompt_usuario}"
+    for modelo in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        try:
+            response = client.models.generate_content(
+                model=modelo,
+                contents=contenido_completo,
+                config=types.GenerateContentConfig(temperature=temperature)
+            )
+            return response.text
+        except Exception as e:
+            print(f"Error en {modelo}: {e}")
+    return None
 
 
 def _llamar_modelo(client, prompt_usuario, temperature=0.4):
@@ -139,12 +182,17 @@ def _generar_cuerpo(client, tema, prioridad_texto, datos_texto, forzar_nicho=Fal
     return _llamar_modelo(client, prompt, temperature=0.4)
 
 
-def _generar_faq(client, tema, cuerpo, forzar_distinto=False):
+def _generar_faq(client_groq, tema, cuerpo, forzar_distinto=False):
     """Paso 2: genera el FAQ en una llamada aparte, mostrándole al modelo
     el cuerpo ya escrito y pidiéndole explícitamente que NO lo repita.
-    Separar esto del paso 1 reduce muchísimo la duplicación, porque el
-    modelo ya no tiene que 'recordar' no copiarse a sí mismo dentro del
-    mismo texto que está generando."""
+    Separar esto del paso 1 reduce la duplicación, porque el modelo ya no
+    tiene que 'recordar' no copiarse a sí mismo dentro del mismo texto que
+    está generando.
+
+    Usa Gemini 2.5 Flash para esto específicamente (ver get_gemini_client)
+    — si no hay GEMINI_API_KEY configurada, cae de vuelta a Groq/Llama para
+    que el agente nunca se rompa por falta de esa llave, aunque el
+    resultado sea menos confiable evitando duplicados."""
     refuerzo = (
         "\nATENCIÓN: un intento anterior repitió casi las mismas frases del "
         "cuerpo del artículo en las respuestas del FAQ. Esta vez cada "
@@ -176,7 +224,12 @@ def _generar_faq(client, tema, cuerpo, forzar_distinto=False):
 
     (hasta la Pregunta 4)
     """
-    return _llamar_modelo(client, prompt, temperature=0.5)
+    resultado_gemini = _llamar_gemini(prompt, temperature=0.5)
+    if resultado_gemini:
+        return resultado_gemini
+
+    # Respaldo: sin GEMINI_API_KEY (o falló), usa Groq para no romper el agente
+    return _llamar_modelo(client_groq, prompt, temperature=0.5)
 
 
 def _extraer_respuestas_faq(faq_texto: str):
@@ -195,11 +248,12 @@ def redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=
     cuando tiene muchas reglas simultáneas):
       1. Genera el cuerpo del artículo (sin FAQ). Si no menciona la Sabana
          de Bogotá / altitud, se reintenta una vez con recordatorio explícito.
-      2. Genera el FAQ aparte, mostrándole el cuerpo ya escrito y pidiendo
-         explícitamente que no lo repita. Si alguna respuesta copia una
-         frase de 6+ palabras consecutivas del cuerpo, se reintenta una vez
-         con una instrucción más fuerte (ver _frase_larga_repetida — un
-         ratio de similitud global resultó poco sensible en la práctica).
+      2. Genera el FAQ aparte (con Gemini 2.5 Flash — ver _generar_faq),
+         mostrándole el cuerpo ya escrito y pidiendo explícitamente que no
+         lo repita. Si alguna respuesta copia una frase de 6+ palabras
+         consecutivas del cuerpo, se reintenta una vez con una instrucción
+         más fuerte (ver _frase_larga_repetida — un ratio de similitud
+         global resultó poco sensible en la práctica).
 
     datos_verificables: opcional — cifras/especificaciones REALES que
     tengas a mano. Si no lo pasas, el agente no inventa ninguno.
@@ -237,7 +291,7 @@ def redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=
                 # fingir que quedó resuelto.
                 nota_nicho = "\n\n⚠️ *Nota interna: este artículo no incluyó lenguaje de autoridad de nicho (Sabana de Bogotá / altitud) tras 2 intentos — revisar manualmente antes de publicar.*"
 
-        # --- PASO 2: FAQ, condicionado al cuerpo ya escrito ---
+        # --- PASO 2: FAQ, condicionado al cuerpo ya escrito (Gemini) ---
         faq = _generar_faq(client, tema, cuerpo)
         respuestas = _extraer_respuestas_faq(faq)
         hay_duplicado = _faq_duplica_cuerpo(respuestas, cuerpo)
