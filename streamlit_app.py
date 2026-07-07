@@ -23,6 +23,7 @@ except Exception as e:
 
 from agente_audio import generar_audio_elevenlabs
 from agente_video import ejecutar_pipeline_agencia
+from agente_blog import redactar_articulo_blog
 from competencia import analizar_contra_competencia, proponer_estrategia_desde_competencia
 from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS, CLAVE_ESTRATEGIA_COMPETITIVA, cluster_ya_ejecutado, registrar_cluster_ejecutado
 
@@ -60,8 +61,8 @@ if "dolores_intermediarios" not in st.session_state:
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
 # ==========================================
-tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp, tab_video, tab_seo, tab_historial = st.tabs([
-    "🧠 Competencia", "⚙️ Estrategia", "🔥 Campaña 360", "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "📜 Historial"
+tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp, tab_video, tab_seo, tab_blog, tab_historial = st.tabs([
+    "🧠 Competencia", "⚙️ Estrategia", "🔥 Campaña 360", "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "📰 Blog GEO/AEO", "📜 Historial"
 ])
 
 # ==========================================
@@ -596,6 +597,67 @@ with tab_360:
                                 st.audio(audio_campana, format="audio/mp3")
                             else:
                                 st.warning("Fallo en la API de ElevenLabs.")
+
+# ==========================================
+# --- PESTAÑA NUEVA: BLOG GEO/AEO ---
+# ==========================================
+with tab_blog:
+    st.subheader("📰 Blog Institucional (GEO/AEO)")
+    st.caption(
+        "Genera artículos de blog de largo formato optimizados para que "
+        "ChatGPT, Perplexity y Gemini los citen — respuesta directa, "
+        "secciones autocontenidas y un bloque de Preguntas Frecuentes listo "
+        "para copiar al bloque nativo FAQ de tu plugin de SEO (ej. Rank "
+        "Math). Distinto de la pestaña Textos: esto es contenido de blog "
+        "extenso, no copy corto."
+    )
+
+    tema_blog = st.text_input(
+        "Tema del artículo (en forma de pregunta natural funciona mejor):",
+        placeholder="Ej: ¿Cuánto se pierde realmente al comprar plantas ornamentales a través de un intermediario?",
+        key="tema_blog"
+    )
+    datos_verificables_blog = st.text_area(
+        "Datos verificables reales (opcional, pero recomendado):",
+        placeholder="Ej: tiempo de aclimatación: 15 días; peso promedio del bulto: 12kg; margen perdido con intermediarios: 30-40%",
+        height=80,
+        key="datos_verificables_blog"
+    )
+
+    if st.button("📝 Generar Artículo de Blog", type="primary"):
+        if not tema_blog:
+            st.warning("Escribe un tema para el artículo.")
+        else:
+            with st.spinner("Redactando artículo de blog optimizado para GEO/AEO..."):
+                try:
+                    articulo_blog = redactar_articulo_blog(
+                        tema_blog,
+                        datos_verificables=datos_verificables_blog or None,
+                        prioridad_estrategica=st.session_state.prioridad_estrategica
+                    )
+                    st.session_state.articulo_blog_data = {"tema": tema_blog, "contenido": articulo_blog}
+                    st.session_state.articulo_blog_listo = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error técnico: {e}")
+
+    if st.session_state.get("articulo_blog_listo"):
+        data = st.session_state.articulo_blog_data
+        st.success(f"Artículo generado — tema: {data['tema']}")
+        st.markdown(data["contenido"])
+
+        st.markdown("---")
+        if st.button("💾 Guardar en Historial como borrador"):
+            if not supabase_ag:
+                st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+            else:
+                supabase_ag.table("historial_contenidos").insert({
+                    "tipo_contenido": "BLOG",
+                    "titulo": data["tema"],
+                    "contenido": data["contenido"],
+                    "estado": "borrador"
+                }).execute()
+                st.success("Guardado en el Historial como borrador.")
 
 # ==========================================
 # --- PESTAÑA 6: HISTORIAL (lee de la AGENCIA) ---
