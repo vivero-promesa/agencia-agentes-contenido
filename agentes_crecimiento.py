@@ -23,7 +23,7 @@ class ArticuloSEO(BaseModel):
     meta_description: str = Field(description="Meta descripción orientada a conversión.")
     contenido_md: str = Field(description="Contenido completo en Markdown impecable.")
 
-# NUEVO: Esquema estricto para Google Ads
+
 class CampanaGoogleAds(BaseModel):
     keywords_positivas: list[str] = Field(description="Lista de 10-15 palabras clave de alta intención de compra.")
     keywords_negativas: list[str] = Field(description="Lista de 5-10 exclusiones críticas para evitar tráfico basura o cruces.")
@@ -51,9 +51,6 @@ def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
 
 
 def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional", prioridad_estrategica: str = None):
-    """
-    Genera un kit de WhatsApp (mensaje de texto + guion de nota de voz).
-    """
     if audiencia == "viverista":
         instrucciones_audiencia = """
 Le escribes a un VIVERISTA (productor), no a un comprador. Usa el discurso
@@ -100,10 +97,6 @@ Responde únicamente con los campos del schema solicitado.
 
 
 def generar_seo_por_intencion(cluster_busqueda: str, dolores_intermediarios: str = None, prioridad_estrategica: str = None, insights_pauta_data: dict = None):
-    """
-    SEO PROACTIVO por intención de búsqueda. 
-    Ahora incluye la inyección de palabras clave generadas por Google Ads.
-    """
     dolores_texto = (
         f"\n\nCONTEXTO — dolores frente a intermediarios tradicionales (usar solo si es relevante al tema, nunca inventar más allá de esto):\n{dolores_intermediarios}\n"
         if dolores_intermediarios else ""
@@ -155,9 +148,6 @@ Responde únicamente con los campos del schema solicitado.
 
 
 def generar_seo_desde_inventario(datos: dict, prioridad_estrategica: str = None):
-    """
-    Genera un artículo SEO B2B a partir de un lote de inventario.
-    """
     prioridad_texto = (
         f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL (ajusta el CTA en función de esto):\n{prioridad_estrategica}\n"
         if prioridad_estrategica else ""
@@ -191,12 +181,7 @@ schema solicitado.
     return ArticuloSEO.model_validate_json(json_res) if json_res else None
 
 
-# NUEVA FUNCIÓN: Agente de Pauta que persiste datos en Supabase
 def generar_y_guardar_pauta(objetivo: str, modo: str, supabase_client) -> dict:
-    """
-    Genera la estrategia de Google Ads usando Gemini y la persiste en Supabase
-    para que el agente SEO pueda alimentarse de ella. Retorna un dict con el resultado o None si falla.
-    """
     if not supabase_client:
         print("Error: Cliente de Supabase no proporcionado.")
         return None
