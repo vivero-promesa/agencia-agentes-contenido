@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import re
-import difflib
 from datetime import date
 from openai import OpenAI
 
@@ -67,11 +66,29 @@ def _contiene_autoridad_nicho(texto: str) -> bool:
     return any(m in texto_low for m in _MARCADORES_NICHO)
 
 
-def _similitud(a: str, b: str) -> float:
-    """Qué tan parecido es el texto a, comparado contra el texto b completo
-    (0 = nada parecido, 1 = idéntico). Se usa para detectar si el FAQ está
-    copiando/parafraseando casi textual el cuerpo del artículo."""
-    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+def _frase_larga_repetida(respuesta: str, cuerpo: str, min_palabras: int = 6) -> bool:
+    """Detecta si la respuesta copia una secuencia de min_palabras o más
+    palabras consecutivas del cuerpo, sin importar mayúsculas/orden del
+    resto del texto — señal fuerte de duplicación real.
+
+    Se prefiere esto sobre una similitud global (tipo difflib ratio contra
+    todo el cuerpo) porque una respuesta corta comparada contra un artículo
+    mucho más largo diluye el porcentaje de parecido incluso cuando SÍ hay
+    frases enteras copiadas — probado con un caso real donde el ratio
+    global salía en 0.2-0.3 (bajo el umbral) pese a tener 19 secuencias de
+    6+ palabras copiadas literalmente.
+    """
+    palabras_resp = re.findall(r"\w+", respuesta.lower())
+    texto_cuerpo = " ".join(re.findall(r"\w+", cuerpo.lower()))
+    for i in range(len(palabras_resp) - min_palabras + 1):
+        secuencia = " ".join(palabras_resp[i:i + min_palabras])
+        if secuencia in texto_cuerpo:
+            return True
+    return False
+
+
+def _faq_duplica_cuerpo(respuestas, cuerpo: str) -> bool:
+    return any(_frase_larga_repetida(r, cuerpo) for r in respuestas)
 
 
 def _generar_cuerpo(client, tema, prioridad_texto, datos_texto, forzar_nicho=False):
@@ -179,9 +196,10 @@ def redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=
       1. Genera el cuerpo del artículo (sin FAQ). Si no menciona la Sabana
          de Bogotá / altitud, se reintenta una vez con recordatorio explícito.
       2. Genera el FAQ aparte, mostrándole el cuerpo ya escrito y pidiendo
-         explícitamente que no lo repita. Si el resultado sale demasiado
-         parecido al cuerpo (medido con similitud de texto), se reintenta
-         una vez con una instrucción más fuerte.
+         explícitamente que no lo repita. Si alguna respuesta copia una
+         frase de 6+ palabras consecutivas del cuerpo, se reintenta una vez
+         con una instrucción más fuerte (ver _frase_larga_repetida — un
+         ratio de similitud global resultó poco sensible en la práctica).
 
     datos_verificables: opcional — cifras/especificaciones REALES que
     tengas a mano. Si no lo pasas, el agente no inventa ninguno.
@@ -222,18 +240,17 @@ def redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=
         # --- PASO 2: FAQ, condicionado al cuerpo ya escrito ---
         faq = _generar_faq(client, tema, cuerpo)
         respuestas = _extraer_respuestas_faq(faq)
-        similitud_max = max((_similitud(r, cuerpo) for r in respuestas), default=0)
+        hay_duplicado = _faq_duplica_cuerpo(respuestas, cuerpo)
 
         nota_faq = ""
-        if similitud_max > 0.5:
+        if hay_duplicado:
             faq_reintento = _generar_faq(client, tema, cuerpo, forzar_distinto=True)
             respuestas_reintento = _extraer_respuestas_faq(faq_reintento)
-            similitud_reintento = max((_similitud(r, cuerpo) for r in respuestas_reintento), default=0)
-            if similitud_reintento < similitud_max:
+            if not _faq_duplica_cuerpo(respuestas_reintento, cuerpo):
                 faq = faq_reintento
-                similitud_max = similitud_reintento
-            if similitud_max > 0.5:
-                nota_faq = "\n\n⚠️ *Nota interna: el FAQ generado se parece bastante al cuerpo del artículo tras 2 intentos — revisar y reescribir manualmente antes de publicar.*"
+                hay_duplicado = False
+            else:
+                nota_faq = "\n\n⚠️ *Nota interna: el FAQ generado repite frases textuales del cuerpo del artículo tras 2 intentos — revisar y reescribir manualmente antes de publicar.*"
 
         nota_publicacion = (
             "\n\n---\n**Cómo publicar el FAQ:** inserta un encabezado H2 "
