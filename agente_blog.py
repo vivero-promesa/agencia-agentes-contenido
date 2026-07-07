@@ -124,22 +124,53 @@ def redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=
        donde ayude a estructurar la información (formato de datos
        estructurados, no solo párrafos).
 
-    4. PREGUNTAS FRECUENTES (H2 "Preguntas Frecuentes"): 3-4 pares P:/R:
-       explícitos, cada respuesta autocontenida en 40-80 palabras.
+    4. PREGUNTAS FRECUENTES (H2 "Preguntas Frecuentes"): exactamente 3-5
+       pares, en este formato exacto para poder copiarlos directo a un
+       bloque de FAQ (cada uno en líneas separadas, sin numeración ni
+       viñetas adicionales):
+
+       PREGUNTA 1: [pregunta natural]
+       RESPUESTA 1: [respuesta autocontenida, 2-4 frases]
+
+       PREGUNTA 2: [pregunta natural]
+       RESPUESTA 2: [respuesta autocontenida, 2-4 frases]
+
+       (y así sucesivamente hasta 5 máximo)
+
+       Reglas para esta sección — son las que más se rompen si no se
+       siguen:
+       - CONDENSAR, NUNCA DUPLICAR: cada respuesta es un resumen ultra
+         condensado de una idea que ya está en el cuerpo del artículo,
+         con palabras DISTINTAS a como se explicó ahí — nunca copies o
+         parafrasees casi textual un párrafo del desarrollo. Si una
+         pregunta no puede resumirse en 2-4 frases sin perder lo
+         esencial, no es una buena pregunta para esta sección.
+       - Máximo 5 preguntas — más que eso diluye la señal para el motor
+         de IA en vez de reforzarla; calidad y foco importan más que
+         cantidad.
+       - Nunca dejes texto de un intento anterior mezclado con uno nuevo
+         (revisa que cada respuesta empiece limpia, sin fragmentos
+         sueltos al inicio).
 
     5. CTA: invitación concreta a cotizar en ViveroOnline.
 
-    6. Al final, agrega un bloque de código con el schema JSON-LD real
-       (combinando @graph con tipo Article y tipo FAQPage, usando las
-       mismas preguntas y respuestas del punto 4 — no inventes preguntas
-       nuevas para el schema). Este bloque debe ser JSON válido, listo para
-       pegar en un tag <script type="application/ld+json">. Antes de
-       publicar, valídalo en el Rich Results Test de Google — un LLM puede
-       cometer errores de sintaxis.
+    6. Opcional / solo si no vas a usar el bloque FAQ nativo de tu plugin
+       de SEO: al final, agrega un bloque de código con el schema JSON-LD
+       (Article + FAQPage, usando las mismas preguntas/respuestas del
+       punto 4). Si usas Rank Math u otro plugin con bloque FAQ nativo,
+       este bloque de código NO es necesario — el plugin genera el schema
+       automáticamente y de forma más confiable que un JSON armado por un
+       LLM. Indica igual cuál de los dos caminos aplica, para que quede
+       claro en el resultado.
 
-    Formato: Markdown limpio para el artículo, seguido del bloque de código
-    JSON al final. Tono profesional, informativo, cercano al mercado
-    colombiano — nunca corporativo frío ni con lenguaje de urgencia.
+    Formato: Markdown limpio para el artículo. Tono profesional,
+    informativo, cercano al mercado colombiano — nunca corporativo frío
+    ni con lenguaje de urgencia. Al final de todo, agrega una nota corta
+    "Cómo publicar el FAQ:" recordando: (a) insertar un encabezado H2
+    "Preguntas Frecuentes" antes del bloque en el editor, (b) usar el
+    bloque de contenido nativo "FAQ" del plugin de SEO (no el Generador
+    de Schema si es una función marcada como PRO), pegando cada pregunta
+    y respuesta ahí.
     """
     
     try:
