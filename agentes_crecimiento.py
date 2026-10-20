@@ -32,23 +32,34 @@ class CampanaGoogleAds(BaseModel):
 
 
 def invocar_modelo_seguro(prompt, response_schema, temperature=0.4):
-    modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    # gemini-1.5-flash ya fue retirado por Google: el respaldo ahora es el
+    # alias vigente gemini-flash-latest. Cada modelo se reintenta con espera
+    # creciente, porque el error más común es 503/429 (modelo saturado).
+    import time
+    modelos = ["gemini-2.5-flash", "gemini-flash-latest"]
     for modelo in modelos:
-        try:
-            response = client_ai.models.generate_content(
-                model=modelo,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type='application/json',
-                    response_schema=response_schema,
-                    temperature=temperature
+        for intento in range(3):
+            try:
+                response = client_ai.models.generate_content(
+                    model=modelo,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type='application/json',
+                        response_schema=response_schema,
+                        temperature=temperature
+                    )
                 )
-            )
-            return response.text
-        except Exception as e:
-            print(f"Error en {modelo}: {e}")
+                if response.text:
+                    return response.text
+                print(f"Respuesta vacía de {modelo}")
+                break
+            except Exception as e:
+                print(f"Error en {modelo} (intento {intento + 1}): {e}")
+                transitorio = any(c in str(e) for c in ("503", "429", "500", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded"))
+                if not transitorio:
+                    break
+                time.sleep(2 * (intento + 1))
     return None
-
 
 def generar_campana_whatsapp(objetivo: str, numero: str = "573000000000", audiencia: str = "institucional", prioridad_estrategica: str = None):
     if audiencia == "viverista":
