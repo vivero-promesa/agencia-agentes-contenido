@@ -96,6 +96,13 @@ def campanas_vigentes(_ag) -> list:
 def memoria_cache(_ag, campana_id: int) -> str:
     return cmp.memoria_campana(_ag, campana_id)
 
+@st.cache_data(ttl=30, show_spinner=False)
+def calendario_cache(_ag, campana_id: int) -> list:
+    try:
+        return cmp.listar_calendario(_ag, campana_id)
+    except Exception:
+        return []
+
 CAMPANAS_OK = bool(supabase_ag) and campanas_listas(supabase_ag)
 
 def campana_activa():
@@ -111,6 +118,7 @@ def campana_activa():
 def refrescar_campanas():
     campanas_vigentes.clear()
     memoria_cache.clear()
+    calendario_cache.clear()
     kpis_historial.clear()
 
 def selector_pilar(clave: str, defecto: str):
@@ -533,6 +541,86 @@ def generar_pieza_calendario(fila: dict, campana: dict) -> dict:
                 else "No encontré un lote disponible que coincida con este tema: la pieza salió sin cantidades ni disponibilidad. Revísala antes de aprobarla.")
     return {"registro": registro, "nota": nota, **extra}
 
+def pestana_desde_calendario(canal: str, prefijo: str) -> bool:
+    """Enruta una pestaña de producción (Textos, WhatsApp, Video, Blog)
+    desde la campaña activa: el tema, el pilar, la audiencia y el ángulo
+    salen de la pieza pendiente del calendario, y se genera con el brief
+    completo + memoria. Devuelve True si se atendió aquí (modo calendario);
+    False para que la pestaña muestre su formulario libre de siempre."""
+    camp = campana_activa()
+    nombres_canal = {"TEXTO": "textos", "WHATSAPP": "WhatsApp", "VIDEO": "video", "BLOG": "blog"}
+    if not camp:
+        st.info(
+            "💡 Elige una **campaña activa** en la barra lateral: así esta pieza sale del calendario "
+            "y sigue la idea central, el mensaje clave y la memoria de la campaña. "
+            "Mientras tanto puedes usar el formulario libre."
+        )
+        return False
+    codigo = cmp.codigo_campana(camp)
+    modo = st.radio(
+        "¿De dónde sale esta pieza?",
+        ["calendario", "libre"],
+        format_func=lambda m: f"📅 Del calendario de {codigo}" if m == "calendario" else "✍️ Tema libre (igual sigue el brief de la campaña)",
+        horizontal=True,
+        key=f"{prefijo}_origen",
+    )
+    if modo == "libre":
+        return False
+
+    pendientes = [f for f in calendario_cache(supabase_ag, camp["id"]) if f.get("canal") == canal and f.get("estado") == "pendiente"]
+    if not pendientes:
+        st.info(
+            f"No hay piezas de {nombres_canal.get(canal, canal)} pendientes en el calendario de {codigo}. "
+            "Agrégalas en la pestaña 📣 Campañas (Proponer calendario con IA) o usa 'Tema libre'."
+        )
+    else:
+        fila = st.selectbox(
+            "Pieza del calendario:",
+            options=pendientes,
+            format_func=lambda f: (
+                f"{f.get('fecha')} · {cmp.PILARES.get(f.get('pilar'), {}).get('nombre', f.get('pilar'))} · "
+                f"{f.get('audiencia')} — {f.get('tema')}"
+            ),
+            key=f"{prefijo}_fila",
+        )
+        st.caption(
+            f"Pilar: {cmp.PILARES.get(fila.get('pilar'), {}).get('nombre', fila.get('pilar'))} · "
+            f"Audiencia: {cmp.AUDIENCIAS.get(fila.get('audiencia'), fila.get('audiencia'))}"
+            + (f" · Ángulo: {fila['angulo']}" if fila.get("angulo") else "")
+        )
+        tema_editado = st.text_input("Tema (puedes ajustarlo):", value=fila.get("tema") or "", key=f"{prefijo}_tema_{fila['id']}")
+        with st.expander("🧾 Brief que recibirá el agente"):
+            st.code(cmp.construir_brief(camp, fila.get("pilar"), canal, fila.get("audiencia"),
+                                        memoria_cache(supabase_ag, camp["id"]), fila.get("angulo")), language=None)
+        if st.button("✍️ Generar con el brief de la campaña", type="primary", key=f"{prefijo}_gen"):
+            if tema_editado.strip() and tema_editado.strip() != (fila.get("tema") or ""):
+                cmp.actualizar_fila_calendario(supabase_ag, fila["id"], {"tema": tema_editado.strip()})
+                fila = {**fila, "tema": tema_editado.strip()}
+            with st.spinner(f"Generando con la idea, el mensaje y la memoria de {codigo}..."):
+                try:
+                    st.session_state[f"{prefijo}_cal_res"] = generar_pieza_calendario(fila, camp)
+                except Exception as e:
+                    st.session_state[f"{prefijo}_cal_res"] = {"error": f"Error técnico: {e}"}
+            limpiar_widgets(f"{prefijo}_fila", f"{prefijo}_res_wa_copy", f"{prefijo}_res_wa_script")
+            st.rerun()
+
+    res = st.session_state.get(f"{prefijo}_cal_res")
+    if res:
+        st.markdown("---")
+        if res.get("nota"):
+            st.caption(f"📦 {res['nota']}")
+        if res.get("error"):
+            st.error(res["error"])
+        else:
+            st.success("✅ Guardada en el Historial como borrador y marcada en el calendario de la campaña.")
+            if res.get("seo"):
+                mostrar_articulo_seo(res["seo"], f"{prefijo}_res_seo")
+            elif res.get("wa"):
+                bloque_whatsapp(res["wa"], f"{prefijo}_res_wa", camp)
+            else:
+                st.markdown(res["registro"]["contenido"])
+    return True
+
 with tab_campanas:
     st.subheader("📣 Campañas: la idea que une todas las piezas")
     st.caption(
@@ -714,6 +802,7 @@ with tab_campanas:
                         filas_ok = cmp.filas_desde_editor(editada, camp_id)
                         try:
                             n_ok = cmp.guardar_calendario(supabase_ag, filas_ok)
+                            calendario_cache.clear()
                             st.session_state.pop(f"cal_prop_{camp_id}", None)
                             st.success(f"{n_ok} pieza(s) agregadas al calendario.")
                             st.rerun()
@@ -725,6 +814,7 @@ with tab_campanas:
                         try:
                             cmp.borrar_pendientes(supabase_ag, camp_id)
                             cmp.guardar_calendario(supabase_ag, filas_ok)
+                            calendario_cache.clear()
                             st.session_state.pop(f"cal_prop_{camp_id}", None)
                             st.rerun()
                         except Exception as e:
@@ -781,6 +871,7 @@ with tab_campanas:
                         confirmar_quitar = st.checkbox("Quitar esta fila del calendario", key=f"cal_conf_{fid}")
                         if st.button("Quitar", key=f"cal_quitar_{fid}", disabled=not confirmar_quitar):
                             supabase_ag.table("calendario_contenidos").delete().eq("id", fid).execute()
+                            calendario_cache.clear()
                             st.rerun()
 
 # ==========================================
@@ -967,36 +1058,37 @@ with tab_estrategia:
 # ==========================================
 with tab_texto:
     st.subheader("Redacción de Artículos y Copy B2B")
-    tema_texto = st.text_input("Tema o requerimiento del texto:", placeholder="Ej: Beneficios de especies nativas en proyectos de paisajismo")
-    pilar_texto = selector_pilar("pilar_texto", "saber")
+    if not pestana_desde_calendario("TEXTO", "tx"):
+        tema_texto = st.text_input("Tema o requerimiento del texto:", placeholder="Ej: Beneficios de especies nativas en proyectos de paisajismo")
+        pilar_texto = selector_pilar("pilar_texto", "saber")
 
-    if st.button("Generar Texto B2B"):
-        if tema_texto:
-            with st.spinner("El agente está redactando..."):
-                try:
-                    resultado_texto = redactar_articulo_seo(tema_texto, prioridad_estrategica=ctx(pilar_texto, "TEXTO", "institucional"))
-                    if es_error_agente(resultado_texto):
-                        st.error(resultado_texto or "El agente no devolvió respuesta.")
-                    else:
-                        st.session_state.texto_data = {"tema": tema_texto, "contenido": resultado_texto, "pilar": pilar_texto}
-                        st.session_state.texto_guardado = False
-                except Exception as e:
-                    st.error(f"Error técnico: {e}")
-        else:
-            st.warning("Por favor ingresa un tema.")
+        if st.button("Generar Texto B2B"):
+            if tema_texto:
+                with st.spinner("El agente está redactando..."):
+                    try:
+                        resultado_texto = redactar_articulo_seo(tema_texto, prioridad_estrategica=ctx(pilar_texto, "TEXTO", "institucional"))
+                        if es_error_agente(resultado_texto):
+                            st.error(resultado_texto or "El agente no devolvió respuesta.")
+                        else:
+                            st.session_state.texto_data = {"tema": tema_texto, "contenido": resultado_texto, "pilar": pilar_texto}
+                            st.session_state.texto_guardado = False
+                    except Exception as e:
+                        st.error(f"Error técnico: {e}")
+            else:
+                st.warning("Por favor ingresa un tema.")
 
-    # Renderizado persistente: antes el texto desaparecía con cualquier clic
-    if st.session_state.get("texto_data"):
-        data = st.session_state.texto_data
-        st.success(f"Texto generado — tema: {data['tema']}")
-        st.write(data["contenido"])
-        if st.session_state.get("texto_guardado"):
-            st.caption("✅ Ya está en el Historial.")
-        elif st.button("💾 Guardar en Historial como borrador", key="texto_guardar"):
-            if guardar_en_historial({"tipo_contenido": "TEXTO", "titulo": data["tema"], "contenido": data["contenido"]}, meta_pieza(data.get("pilar"), "TEXTO", "institucional")):
-                st.session_state.texto_guardado = True
-                kpis_historial.clear()
-                st.success("Guardado en el Historial como borrador.")
+        # Renderizado persistente: antes el texto desaparecía con cualquier clic
+        if st.session_state.get("texto_data"):
+            data = st.session_state.texto_data
+            st.success(f"Texto generado — tema: {data['tema']}")
+            st.write(data["contenido"])
+            if st.session_state.get("texto_guardado"):
+                st.caption("✅ Ya está en el Historial.")
+            elif st.button("💾 Guardar en Historial como borrador", key="texto_guardar"):
+                if guardar_en_historial({"tipo_contenido": "TEXTO", "titulo": data["tema"], "contenido": data["contenido"]}, meta_pieza(data.get("pilar"), "TEXTO", "institucional")):
+                    st.session_state.texto_guardado = True
+                    kpis_historial.clear()
+                    st.success("Guardado en el Historial como borrador.")
 
 # ==========================================
 # --- PESTAÑA: WHATSAPP ---
@@ -1009,54 +1101,55 @@ with tab_whatsapp:
         "el comprador nunca habla directo con el viverista. Con campaña activa, "
         "el enlace lleva su código para medir qué campaña trajo la conversación."
     )
-    audiencia_wa = st.radio(
-        "¿A quién le escribes?",
-        options=["institucional", "viverista"],
-        format_func=lambda x: "Comprador institucional (paisajista/constructora)" if x == "institucional" else "Viverista (productor)",
-        horizontal=True
-    )
-    obj_wa = st.text_input("Objetivo de la campaña:", placeholder="Ej: Vender 500 Eugenias a paisajistas")
-    pilar_wa = selector_pilar(f"pilar_wa_{audiencia_wa}", "abastecer" if audiencia_wa == "institucional" else "oficio")
+    if not pestana_desde_calendario("WHATSAPP", "wa_cal"):
+        audiencia_wa = st.radio(
+            "¿A quién le escribes?",
+            options=["institucional", "viverista"],
+            format_func=lambda x: "Comprador institucional (paisajista/constructora)" if x == "institucional" else "Viverista (productor)",
+            horizontal=True
+        )
+        obj_wa = st.text_input("Objetivo del mensaje:", placeholder="Ej: Vender 500 Eugenias a paisajistas")
+        pilar_wa = selector_pilar(f"pilar_wa_{audiencia_wa}", "abastecer" if audiencia_wa == "institucional" else "oficio")
 
-    if st.button("Generar Kit de WhatsApp"):
-        if obj_wa:
-            with st.spinner("Conectando con Agente de Crecimiento..."):
-                campana = generar_campana_whatsapp(
-                    objetivo_whatsapp(obj_wa, audiencia_wa, brief_actual(pilar_wa, "WHATSAPP", audiencia_wa)),
-                    numero=WHATSAPP_NUMERO,
-                    audiencia=audiencia_wa,
-                    prioridad_estrategica=ctx(pilar_wa, "WHATSAPP", audiencia_wa)
-                )
-                if campana:
-                    st.session_state.wa_kit = campana
-                    st.session_state.wa_kit_meta = {"objetivo": obj_wa, "audiencia": audiencia_wa, "pilar": pilar_wa}
-                    st.session_state.wa_guardado = False
-                    # Sin esto, un segundo kit seguía mostrando el texto del primero
-                    limpiar_widgets("wa_copy", "wa_script")
-                    st.rerun()
-                else:
-                    st.error("El agente de crecimiento no pudo responder.")
-        else:
-            st.warning("Por favor ingresa un objetivo.")
+        if st.button("Generar Kit de WhatsApp"):
+            if obj_wa:
+                with st.spinner("Conectando con Agente de Crecimiento..."):
+                    campana = generar_campana_whatsapp(
+                        objetivo_whatsapp(obj_wa, audiencia_wa, brief_actual(pilar_wa, "WHATSAPP", audiencia_wa)),
+                        numero=WHATSAPP_NUMERO,
+                        audiencia=audiencia_wa,
+                        prioridad_estrategica=ctx(pilar_wa, "WHATSAPP", audiencia_wa)
+                    )
+                    if campana:
+                        st.session_state.wa_kit = campana
+                        st.session_state.wa_kit_meta = {"objetivo": obj_wa, "audiencia": audiencia_wa, "pilar": pilar_wa}
+                        st.session_state.wa_guardado = False
+                        # Sin esto, un segundo kit seguía mostrando el texto del primero
+                        limpiar_widgets("wa_copy", "wa_script")
+                        st.rerun()
+                    else:
+                        st.error("El agente de crecimiento no pudo responder.")
+            else:
+                st.warning("Por favor ingresa un objetivo.")
 
-    # Renderizado persistente (el botón de audio funciona sin borrar pantalla)
-    if st.session_state.get("wa_kit"):
-        meta = st.session_state.wa_kit_meta
-        st.success(f"Kit para {'viverista' if meta['audiencia'] == 'viverista' else 'comprador institucional'} — {meta['objetivo']}")
-        copy_actual, _ = bloque_whatsapp(st.session_state.wa_kit, "wa")
-        st.markdown("---")
-        if st.session_state.get("wa_guardado"):
-            st.caption("✅ Ya está en el Historial.")
-        elif st.button("💾 Guardar copy en Historial", key="wa_guardar"):
-            if guardar_en_historial({"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp ({meta['audiencia']}) — {meta['objetivo']}", "contenido": copy_actual}, meta_pieza(meta.get("pilar"), "WHATSAPP", meta["audiencia"])):
-                st.session_state.wa_guardado = True
-                kpis_historial.clear()
-                st.success("Guardado en el Historial como borrador.")
+        # Renderizado persistente (el botón de audio funciona sin borrar pantalla)
+        if st.session_state.get("wa_kit"):
+            meta = st.session_state.wa_kit_meta
+            st.success(f"Kit para {'viverista' if meta['audiencia'] == 'viverista' else 'comprador institucional'} — {meta['objetivo']}")
+            copy_actual, _ = bloque_whatsapp(st.session_state.wa_kit, "wa")
+            st.markdown("---")
+            if st.session_state.get("wa_guardado"):
+                st.caption("✅ Ya está en el Historial.")
+            elif st.button("💾 Guardar copy en Historial", key="wa_guardar"):
+                if guardar_en_historial({"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp ({meta['audiencia']}) — {meta['objetivo']}", "contenido": copy_actual}, meta_pieza(meta.get("pilar"), "WHATSAPP", meta["audiencia"])):
+                    st.session_state.wa_guardado = True
+                    kpis_historial.clear()
+                    st.success("Guardado en el Historial como borrador.")
 
 # ==========================================
 # --- PESTAÑA: VIDEO (B-Roll y Producción Veo 3.1) ---
-# Sin cambios: el módulo de video se queda tal como está (se opera a mano
-# con Google Vids).
+# El renderizado con Veo (paso 2) y agente_video.py no cambian. El concepto
+# (paso 1) sale del calendario de la campaña activa.
 # ==========================================
 with tab_video:
     st.subheader("🎬 Producción de Video B2B (Veo 3.1)")
@@ -1064,18 +1157,19 @@ with tab_video:
 
     # PASO 1: IDEACIÓN
     with st.expander("📝 1. Pre-Producción (Generar Concepto y Guion)", expanded=True):
-        tema_video = st.text_input("Concepto visual del comercial:", placeholder="Ej: Lote mayorista de eugenias para constructoras")
-        if st.button("Generar Concepto Visual"):
-            if tema_video:
-                with st.spinner("Estructurando tomas, guion y copy para redes..."):
-                    try:
-                        resultado_video = redactar_guion_viral(tema_video, prioridad_estrategica=st.session_state.prioridad_estrategica)
-                        st.success("Concepto generado. Úsalo como inspiración para tu Storyboard.")
-                        st.write(resultado_video)
-                    except Exception as e:
-                        st.error(f"Error técnico: {e}")
-            else:
-                st.warning("Ingresa un concepto primero.")
+        if not pestana_desde_calendario("VIDEO", "vd"):
+            tema_video = st.text_input("Concepto visual del comercial:", placeholder="Ej: Lote mayorista de eugenias para constructoras")
+            if st.button("Generar Concepto Visual"):
+                if tema_video:
+                    with st.spinner("Estructurando tomas, guion y copy para redes..."):
+                        try:
+                            resultado_video = redactar_guion_viral(tema_video, prioridad_estrategica=ctx(None, "VIDEO", "institucional"))
+                            st.success("Concepto generado. Úsalo como inspiración para tu Storyboard.")
+                            st.write(resultado_video)
+                        except Exception as e:
+                            st.error(f"Error técnico: {e}")
+                else:
+                    st.warning("Ingresa un concepto primero.")
 
     # PASO 2: RENDERIZADO EN LA NUBE (GOOGLE VEO 3.1)
     with st.expander("🎥 2. Producción (Renderizar Escenas)", expanded=False):
@@ -1412,63 +1506,64 @@ with tab_blog:
         "extenso, no copy corto."
     )
 
-    tema_blog = st.text_input(
-        "Tema del artículo (en forma de pregunta natural funciona mejor):",
-        placeholder="Ej: ¿Cuánto se pierde realmente al comprar plantas ornamentales a través de un intermediario?",
-        key="tema_blog"
-    )
-    datos_verificables_blog = st.text_area(
-        "Datos verificables reales (opcional, pero recomendado):",
-        placeholder="Ej: tiempo de aclimatación: 15 días; peso promedio del bulto: 12kg; margen perdido con intermediarios: 30-40%",
-        height=80,
-        key="datos_verificables_blog"
-    )
-    pilar_blog = selector_pilar("pilar_blog", "saber")
+    if not pestana_desde_calendario("BLOG", "bl"):
+        tema_blog = st.text_input(
+            "Tema del artículo (en forma de pregunta natural funciona mejor):",
+            placeholder="Ej: ¿Cuánto se pierde realmente al comprar plantas ornamentales a través de un intermediario?",
+            key="tema_blog"
+        )
+        datos_verificables_blog = st.text_area(
+            "Datos verificables reales (opcional, pero recomendado):",
+            placeholder="Ej: tiempo de aclimatación: 15 días; peso promedio del bulto: 12kg; margen perdido con intermediarios: 30-40%",
+            height=80,
+            key="datos_verificables_blog"
+        )
+        pilar_blog = selector_pilar("pilar_blog", "saber")
 
-    if st.button("📝 Generar Artículo de Blog", type="primary"):
-        if not tema_blog:
-            st.warning("Escribe un tema para el artículo.")
-        else:
-            with st.spinner("Redactando artículo de blog optimizado para GEO/AEO..."):
-                try:
-                    articulo_blog = redactar_articulo_blog(
-                        tema_blog,
-                        datos_verificables=datos_verificables_blog or None,
-                        prioridad_estrategica=ctx(pilar_blog, "BLOG", "institucional")
-                    )
-                    if es_error_agente(articulo_blog):
-                        st.error(articulo_blog or "El agente de blog no devolvió contenido.")
-                    else:
-                        st.session_state.articulo_blog_data = {"tema": tema_blog, "contenido": articulo_blog, "pilar": pilar_blog}
-                        st.session_state.articulo_blog_listo = True
-                        st.session_state.articulo_blog_guardado = False
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error técnico: {e}")
+        if st.button("📝 Generar Artículo de Blog", type="primary"):
+            if not tema_blog:
+                st.warning("Escribe un tema para el artículo.")
+            else:
+                with st.spinner("Redactando artículo de blog optimizado para GEO/AEO..."):
+                    try:
+                        articulo_blog = redactar_articulo_blog(
+                            tema_blog,
+                            datos_verificables=datos_verificables_blog or None,
+                            prioridad_estrategica=ctx(pilar_blog, "BLOG", "institucional")
+                        )
+                        if es_error_agente(articulo_blog):
+                            st.error(articulo_blog or "El agente de blog no devolvió contenido.")
+                        else:
+                            st.session_state.articulo_blog_data = {"tema": tema_blog, "contenido": articulo_blog, "pilar": pilar_blog}
+                            st.session_state.articulo_blog_listo = True
+                            st.session_state.articulo_blog_guardado = False
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error técnico: {e}")
 
-    if st.session_state.get("articulo_blog_listo"):
-        data = st.session_state.articulo_blog_data
-        st.success(f"Artículo generado — tema: {data['tema']}")
-        st.markdown(data["contenido"])
+        if st.session_state.get("articulo_blog_listo"):
+            data = st.session_state.articulo_blog_data
+            st.success(f"Artículo generado — tema: {data['tema']}")
+            st.markdown(data["contenido"])
 
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.session_state.get("articulo_blog_guardado"):
-                st.caption("✅ Ya está en el Historial.")
-            elif st.button("💾 Guardar en Historial como borrador"):
-                if guardar_en_historial({"tipo_contenido": "BLOG", "titulo": data["tema"], "contenido": data["contenido"]}, meta_pieza(data.get("pilar"), "BLOG", "institucional")):
-                    st.session_state.articulo_blog_guardado = True
-                    kpis_historial.clear()
-                    st.success("Guardado en el Historial como borrador.")
-        with c2:
-            st.download_button(
-                "⬇️ Descargar .md para WordPress",
-                data=data["contenido"],
-                file_name="articulo_blog.md",
-                mime="text/markdown",
-                key="blog_descargar_md",
-            )
+            st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.session_state.get("articulo_blog_guardado"):
+                    st.caption("✅ Ya está en el Historial.")
+                elif st.button("💾 Guardar en Historial como borrador"):
+                    if guardar_en_historial({"tipo_contenido": "BLOG", "titulo": data["tema"], "contenido": data["contenido"]}, meta_pieza(data.get("pilar"), "BLOG", "institucional")):
+                        st.session_state.articulo_blog_guardado = True
+                        kpis_historial.clear()
+                        st.success("Guardado en el Historial como borrador.")
+            with c2:
+                st.download_button(
+                    "⬇️ Descargar .md para WordPress",
+                    data=data["contenido"],
+                    file_name="articulo_blog.md",
+                    mime="text/markdown",
+                    key="blog_descargar_md",
+                )
 
 # ==========================================
 # --- PESTAÑA: HISTORIAL (lee de la AGENCIA) ---
@@ -1478,6 +1573,7 @@ def marcar_calendario(item: dict, estado: str):
     if CAMPANAS_OK and item.get("calendario_id"):
         try:
             cmp.actualizar_fila_calendario(supabase_ag, item["calendario_id"], {"estado": estado})
+            calendario_cache.clear()
         except Exception:
             pass
 
