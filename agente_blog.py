@@ -8,6 +8,12 @@ from google.genai import types
 
 from identidad_marca import IDENTIDAD_COMPACTA
 
+# Modelo de texto en Groq. llama-3.1-8b-instant fue retirado del plan
+# gratuito de Groq el 16 ago 2026 (reemplazo oficial: openai/gpt-oss-20b).
+# Se usa gpt-oss-120b por calidad del copy B2B; se puede cambiar sin tocar
+# código con el secret GROQ_MODEL (ej. "openai/gpt-oss-20b").
+MODELO_GROQ = os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b"
+
 # ==========================================
 # CEREBRO ESTRATÉGICO
 # ==========================================
@@ -79,7 +85,7 @@ def _llamar_gemini(prompt_usuario, temperature=0.5):
         return None
 
     contenido_completo = f"{PROMPT_SISTEMA_MAESTRO}\n\n{prompt_usuario}"
-    for modelo in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+    for modelo in ["gemini-2.5-flash", "gemini-flash-latest"]:
         try:
             response = client.models.generate_content(
                 model=modelo,
@@ -94,7 +100,7 @@ def _llamar_gemini(prompt_usuario, temperature=0.5):
 
 def _llamar_modelo(client, prompt_usuario, temperature=0.4):
     respuesta = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model=MODELO_GROQ,
         messages=[
             {"role": "system", "content": PROMPT_SISTEMA_MAESTRO},
             {"role": "user", "content": prompt_usuario}
