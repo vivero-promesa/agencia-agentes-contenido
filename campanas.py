@@ -67,7 +67,7 @@ CANALES = {
     "SEO": "Captura una búsqueda concreta con intención de compra.",
     "WHATSAPP": "Activa: lleva a una conversación o cotización con el código de campaña.",
     "VIDEO": "Emociona y muestra el oficio (se produce a mano con Google Vids).",
-    "TEXTO": "Post corto para redes/LinkedIn que repite el mensaje clave.",
+    "TEXTO": "Texto B2B con estructura PAS (problema, agitación, solución, logística, CTA) para LinkedIn, newsletter o la web.",
 }
 
 AUDIENCIAS = {
@@ -112,6 +112,9 @@ def tablas_listas(sb) -> bool:
     try:
         sb.table("campanas").select("id").limit(1).execute()
         sb.table("calendario_contenidos").select("id").limit(1).execute()
+        # Si la migración quedó a medias, el historial no tiene las columnas
+        # nuevas y guardar con etiquetas fallaría: mejor tratarlo como no lista.
+        sb.table("historial_contenidos").select(",".join(COLUMNAS_META_HISTORIAL + ("fecha_publicacion", "url_publicada"))).limit(1).execute()
         return True
     except Exception:
         return False
@@ -174,10 +177,12 @@ def memoria_campana(sb, campana_id: int, n: int = 6, largo: int = 220) -> str:
         texto = " ".join(str(p.get("contenido") or "").split())
         if len(texto) > largo:
             texto = texto[:largo].rsplit(" ", 1)[0] + "…"
+        estado = "publicado" if p.get("url_publicada") else (p.get("estado") or "borrador")
         etiqueta = " · ".join(x for x in [
             str(p.get("tipo_contenido") or ""),
             PILARES.get(p.get("pilar") or "", {}).get("nombre", ""),
             str(p.get("fecha_creacion") or "")[:10],
+            estado,
         ] if x)
         lineas.append(f"- [{etiqueta}] {p.get('titulo') or 'Sin título'}: {texto}")
     return "\n".join(lineas)
@@ -217,7 +222,9 @@ def construir_brief(
         if p["tipo"] == "marca":
             partes.append("Esta pieza construye marca: prioriza confianza y recordación; el CTA es suave, sin presión.")
         else:
-            partes.append("Esta pieza activa venta: CTA claro hacia cotizar por WhatsApp, sin urgencia falsa.")
+            partes.append("Esta pieza activa venta: CTA claro hacia cotizar por WhatsApp, sin urgencia falsa. "
+                          "Usa SOLO los datos reales de lote que vengan en el tema; si no vienen, no menciones "
+                          "cantidades, precios ni disponibilidad concreta.")
     if canal and canal in CANALES:
         partes.append(f"Rol del canal {canal}: {CANALES[canal]}")
     if audiencia and audiencia in AUDIENCIAS:
@@ -227,7 +234,8 @@ def construir_brief(
     if memoria:
         partes.append(
             "Lo que la campaña YA publicó (da continuidad: mantén el mensaje clave, "
-            "no repitas frases ni ángulos, no contradigas):\n" + memoria
+            "no repitas frases ni ángulos, no contradigas; lo marcado como borrador "
+            "aún no salió al público):\n" + memoria
         )
     partes.append("=== FIN DEL BRIEF ===")
     return "\n".join(partes)
@@ -259,12 +267,12 @@ class CalendarioIA(BaseModel):
     filas: list[FilaCalendarioIA]
 
 
-def prompt_calendario(campana: dict, semanas: int, piezas_semana: int, memoria: str = "") -> str:
+def prompt_calendario(campana: dict, semanas: int, piezas_semana: int, memoria: str = "", marca: str = "viveroonline.com.co") -> str:
     pilares_txt = "\n".join(f"- {k}: {v['nombre']} ({v['tipo']}) — {v['que']} Canales naturales: {', '.join(v['canales'])}" for k, v in PILARES.items())
     canales_txt = "\n".join(f"- {k}: {v}" for k, v in CANALES.items())
     total = semanas * piezas_semana
     return f"""Eres planner de una agencia de publicidad B2B. Diseña el calendario editorial
-de una campaña del marketplace de plantas ornamentales viverohub (Sabana de Bogotá).
+de una campaña del marketplace de plantas ornamentales {marca} (Sabana de Bogotá).
 
 CAMPAÑA
 - Nombre: {campana.get('nombre')}
@@ -287,14 +295,19 @@ REGLAS
 4. Cada semana usa al menos 2 canales distintos. No repitas el mismo tema.
 5. Al menos una pieza por semana para viveristas si la audiencia principal es institucional (el marketplace tiene dos lados), y viceversa.
 6. No inventes cifras, nombres de viveros ni clientes.
-{('7. Ya se publicó esto en la campaña; continúa desde ahí sin repetir:' + chr(10) + memoria) if memoria else ''}
+7. En las piezas del pilar 'lotes' el tema nombra la especie o categoría (ej. "Eugenias para cerramientos"),
+   nunca cantidades ni precios: el lote real del inventario se adjunta al momento de generar la pieza.
+{('8. Ya se publicó esto en la campaña; continúa desde ahí sin repetir:' + chr(10) + memoria) if memoria else ''}
 Devuelve JSON con la lista 'filas'."""
 
 
-def normalizar_filas(filas: list, campana: dict, semanas: int) -> list:
-    """Valida lo que devuelve la IA y calcula la fecha real de cada pieza a
-    partir de la fecha de inicio de la campaña."""
-    inicio = _fecha(campana.get("fecha_inicio")) or date.today()
+def normalizar_filas(filas: list, campana: dict, semanas: int, desde: Optional[date] = None) -> list:
+    """Valida lo que devuelve la IA y calcula la fecha real de cada pieza.
+    Arranca en 'desde' (hoy, o el día siguiente a la última pieza ya
+    planeada) y nunca antes del inicio de la campaña. Descarta lo que caiga
+    después de la fecha de fin."""
+    inicio = max(_fecha(campana.get("fecha_inicio")) or date.today(), desde or date.min)
+    fin = _fecha(campana.get("fecha_fin"))
     lunes = inicio - timedelta(days=inicio.weekday())
     salida = []
     for f in filas:
@@ -317,6 +330,8 @@ def normalizar_filas(filas: list, campana: dict, semanas: int) -> list:
         fecha = lunes + timedelta(weeks=semana - 1, days=idx)
         if fecha < inicio:
             fecha = inicio
+        if fin and fecha > fin:
+            continue
         salida.append({
             "campana_id": campana.get("id"),
             "fecha": fecha.isoformat(),
@@ -331,10 +346,11 @@ def normalizar_filas(filas: list, campana: dict, semanas: int) -> list:
     return salida
 
 
-def generar_calendario(invocar, campana: dict, semanas: int = 4, piezas_semana: int = 3, memoria: str = "") -> list:
+def generar_calendario(invocar, campana: dict, semanas: int = 4, piezas_semana: int = 3, memoria: str = "",
+                       marca: str = "viveroonline.com.co", desde: Optional[date] = None) -> list:
     """'invocar' = función (prompt, schema) -> texto JSON (se inyecta
     invocar_modelo_seguro de agentes_crecimiento, Gemini con salida JSON)."""
-    texto = invocar(prompt_calendario(campana, semanas, piezas_semana, memoria), CalendarioIA)
+    texto = invocar(prompt_calendario(campana, semanas, piezas_semana, memoria, marca), CalendarioIA)
     if not texto:
         return []
     try:
@@ -342,7 +358,7 @@ def generar_calendario(invocar, campana: dict, semanas: int = 4, piezas_semana: 
     except (TypeError, json.JSONDecodeError):
         return []
     filas = datos.get("filas", []) if isinstance(datos, dict) else datos
-    return normalizar_filas(filas or [], campana, semanas)
+    return normalizar_filas(filas or [], campana, semanas, desde)
 
 
 def filas_desde_editor(filas: list, campana_id: int) -> list:
@@ -368,6 +384,47 @@ def filas_desde_editor(filas: list, campana_id: int) -> list:
             "estado": "pendiente",
         })
     return salida
+
+
+def inicio_siguiente_calendario(calendario: list, hoy: Optional[date] = None) -> date:
+    """Un calendario nuevo arranca hoy o justo después de la última pieza ya
+    planeada (para continuar la campaña, no reiniciarla)."""
+    hoy = hoy or date.today()
+    fechas = [_fecha(c.get("fecha")) for c in calendario or []]
+    fechas = [f for f in fechas if f]
+    return max([hoy] + [f + timedelta(days=1) for f in fechas])
+
+
+def _normalizar_texto(t: str) -> list:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(t or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    palabras = [w for w in "".join(c if c.isalnum() else " " for c in t).split() if len(w) > 3]
+    # Plural → singular simple, para que "Eugenias" coincida con "Eugenia"
+    return [w[:-2] if w.endswith("es") and len(w) > 5 else (w[:-1] if w.endswith("s") else w) for w in palabras]
+
+
+def elegir_lote(tema: str, lotes: list, nombre_de) -> Optional[dict]:
+    """Lote real cuya planta es la que nombra el tema de la pieza.
+    'nombre_de(lote)' devuelve "Nombre común (Nombre científico)". Coincide
+    si TODAS las palabras del nombre común están en el tema (así "Palmas
+    botella" no se confunde con "Palma areca"), o si aparece el género
+    científico. Si nada coincide devuelve None: mejor no inventar que
+    vender otra planta."""
+    palabras_tema = set(_normalizar_texto(tema))
+    mejor, puntaje = None, 0
+    for lote in lotes or []:
+        nombre = str(nombre_de(lote) or "")
+        comun, _, cientifico = nombre.partition("(")
+        p_comun = set(_normalizar_texto(comun))
+        p_cient = _normalizar_texto(cientifico)
+        coincide_comun = bool(p_comun) and p_comun <= palabras_tema
+        coincide_genero = bool(p_cient) and p_cient[0] in palabras_tema
+        if coincide_comun or coincide_genero:
+            valor = len(p_comun & palabras_tema) + len(set(p_cient) & palabras_tema)
+            if valor > puntaje:
+                mejor, puntaje = lote, valor
+    return mejor
 
 
 def listar_calendario(sb, campana_id: int) -> list:
