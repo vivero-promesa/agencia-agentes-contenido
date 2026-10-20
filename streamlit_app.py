@@ -429,8 +429,8 @@ with st.sidebar:
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
 # ==========================================
-tab_campanas, tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp, tab_video, tab_seo, tab_blog, tab_historial = st.tabs([
-    "📣 Campañas", "🧠 Competencia", "⚙️ Estrategia", "🔥 Campaña 360", "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "📰 Blog GEO/AEO", "📜 Historial"
+tab_campanas, tab_competencia, tab_estrategia, tab_texto, tab_whatsapp, tab_video, tab_seo, tab_blog, tab_historial, tab_360 = st.tabs([
+    "📣 Campañas", "🧠 Competencia", "⚙️ Estrategia", "📝 Textos", "💬 WhatsApp", "🎬 Video", "🚀 SEO", "📰 Blog GEO/AEO", "📜 Historial", "🔥 Campaña venta rápida"
 ])
 
 # ==========================================
@@ -1279,14 +1279,18 @@ with tab_seo:
             mostrar_articulo_seo(st.session_state.seo_proactivo, "seo_proactivo")
 
 # ==========================================
-# --- PESTAÑA: ORQUESTADOR 360 ---
+# --- PESTAÑA: CAMPAÑA VENTA RÁPIDA (antes "Campaña 360") ---
 # LEE del Marketplace | ESCRIBE en la Agencia
 # Con campaña activa, el lote es la ACTIVACIÓN (pilar 'lotes') dentro de la
 # idea de la campaña: vende el lote con el mensaje clave de siempre.
 # ==========================================
 with tab_360:
-    st.subheader("🔥 Orquestador Maestro de Campaña 360")
-    st.markdown("Lee el inventario del **Marketplace**, genera la campaña (SEO, WhatsApp y Video) y la guarda en la base de la **Agencia**.")
+    st.subheader("🔥 Campaña venta rápida")
+    st.markdown(
+        "Es una herramienta de venta rápida: empuja un lote concreto del inventario en un solo clic. "
+        "Lee el inventario del **Marketplace**, genera SEO, WhatsApp y guion de video para ese lote "
+        "y los guarda en la base de la **Agencia**."
+    )
     if campana_activa():
         st.caption(f"🎯 Las tres piezas salen dentro de {cmp.codigo_campana(campana_activa())} como pilar «Lotes disponibles» (activación de venta).")
 
@@ -1318,7 +1322,7 @@ with tab_360:
             st.caption(f"{len(pendientes)} lote(s) sin campaña. Por defecto se propone el más reciente; puedes elegir otro.")
             lote_sel = st.selectbox("Lote para la campaña:", options=pendientes, format_func=_etiqueta_lote, key="c360_lote")
 
-            if st.button("⚡ Lanzar Campaña 360", type="primary"):
+            if st.button("⚡ Lanzar venta rápida", type="primary"):
                 with st.spinner("Sincronizando agentes y ejecutando campaña..."):
                     try:
                         item = lote_sel
@@ -1367,11 +1371,11 @@ with tab_360:
     if st.session_state.get("c360_lista"):
         data = st.session_state.c360_data
         lote = data["lote"]
-        st.success(f"Campaña generada · {data.get('guardados', 0)} pieza(s) guardadas en el Historial.")
+        st.success(f"Venta rápida generada · {data.get('guardados', 0)} pieza(s) guardadas en el Historial.")
         if not data.get("candado"):
             st.warning("El SEO no se generó o no se guardó: el lote NO quedó marcado como procesado, puedes reintentarlo.")
         st.info(
-            f"🎯 **Campaña Activa:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']}"
+            f"🎯 **Lote en venta:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']}"
             + (f" · interno: {data['vivero_interno']} (no se publica)" if data.get("vivero_interno") else "")
         )
 
@@ -1539,7 +1543,7 @@ with tab_historial:
                 if total and pagina > 1:
                     st.session_state.hist_pagina = 1
                     st.rerun()
-                st.info("No hay contenido con estos filtros. Lanza una Campaña 360 o genera una pieza para empezar.")
+                st.info("No hay contenido con estos filtros. Lanza una Campaña venta rápida o genera una pieza para empezar.")
             else:
                 cpag, cexp = st.columns([2, 1])
                 with cpag:
