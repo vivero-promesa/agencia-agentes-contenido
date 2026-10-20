@@ -5,6 +5,12 @@ from openai import OpenAI
 
 from identidad_marca import IDENTIDAD_COMPACTA
 
+# Modelo de texto en Groq. llama-3.1-8b-instant fue retirado del plan
+# gratuito de Groq el 16 ago 2026 (reemplazo oficial: openai/gpt-oss-20b).
+# Se usa gpt-oss-120b por calidad del copy B2B; se puede cambiar sin tocar
+# código con el secret GROQ_MODEL (ej. "openai/gpt-oss-20b").
+MODELO_GROQ = os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b"
+
 
 def get_client_competencia():
     api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
@@ -63,7 +69,7 @@ frío ni con lenguaje de urgencia.
 
     try:
         respuesta = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=MODELO_GROQ,
             messages=[
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": prompt_usuario}
@@ -126,7 +132,7 @@ DOLORES_PROPUESTOS:
 
     try:
         respuesta = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=MODELO_GROQ,
             messages=[
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": prompt_usuario}

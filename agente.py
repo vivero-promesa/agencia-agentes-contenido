@@ -6,6 +6,12 @@ from openai import OpenAI
 from identidad_marca import IDENTIDAD_COMPACTA
 from brand_book import GUIA_VISUAL_VIDEO
 
+# Modelo de texto en Groq. llama-3.1-8b-instant fue retirado del plan
+# gratuito de Groq el 16 ago 2026 (reemplazo oficial: openai/gpt-oss-20b).
+# Se usa gpt-oss-120b por calidad del copy B2B; se puede cambiar sin tocar
+# código con el secret GROQ_MODEL (ej. "openai/gpt-oss-20b").
+MODELO_GROQ = os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b"
+
 def _construir_prompt_sistema(prioridad_estrategica: str = None) -> str:
     extra = f"\n\nPRIORIDAD ESTRATÉGICA ACTUAL:\n{prioridad_estrategica}\n" if prioridad_estrategica else ""
     return f"""
@@ -51,7 +57,7 @@ def redactar_guion_viral(tema, tipo_publico="Constructoras y Jefes de Compras B2
 
     try:
         respuesta = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=MODELO_GROQ,
             messages=[
                 {"role": "system", "content": _construir_prompt_sistema(prioridad_estrategica)},
                 {"role": "user", "content": instrucciones}
@@ -81,7 +87,7 @@ def redactar_articulo_seo(tema, prioridad_estrategica=None):
 
     try:
         respuesta = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=MODELO_GROQ,
             messages=[
                 {"role": "system", "content": _construir_prompt_sistema(prioridad_estrategica)},
                 {"role": "user", "content": prompt}
