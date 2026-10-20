@@ -167,12 +167,13 @@ def es_error_agente(texto) -> bool:
     inicio = texto.strip()[:3]
     return inicio.startswith("⚠️") or inicio.startswith("❌")
 
-def link_whatsapp(texto: str) -> str:
+def link_whatsapp(texto: str, campana: dict = None) -> str:
     """Construye el enlace wa.me de forma determinística (no lo inventa la IA)
     hacia el número oficial de la plataforma, con el copy codificado. Si hay
     campaña activa, agrega su código (ej. VH-003) para saber qué campaña
-    trajo cada conversación."""
-    codigo = cmp.codigo_campana(campana_activa())
+    trajo cada conversación. 'campana' fuerza el código de una campaña
+    concreta (calendario); si no, se usa la campaña activa."""
+    codigo = cmp.codigo_campana(campana or campana_activa())
     if codigo and codigo not in (texto or ""):
         texto = f"{texto or ''}\n\n(Ref. {codigo})"
     return f"https://wa.me/{WHATSAPP_NUMERO}?text={quote(texto or '')}"
@@ -207,6 +208,10 @@ def insertar_historial(registros, meta: dict = None) -> list:
             # El canal por defecto es el tipo de pieza (SEO, WHATSAPP, VIDEO...)
             if r.get("campana_id"):
                 r.setdefault("canal", r.get("tipo_contenido"))
+    # PostgREST rechaza una inserción en lote si las filas no traen las mismas
+    # columnas: se completan las faltantes con None.
+    columnas = set().union(*(r.keys() for r in validos))
+    validos = [{c: r.get(c) for c in columnas} for r in validos]
     try:
         res = supabase_ag.table("historial_contenidos").insert(validos).execute()
         memoria_cache.clear()
@@ -290,12 +295,12 @@ def mostrar_articulo_seo(articulo, prefijo: str):
         key=f"{prefijo}_descargar_md",
     )
 
-def bloque_whatsapp(wa, prefijo: str):
+def bloque_whatsapp(wa, prefijo: str, campana: dict = None):
     """Copy + guion editables, enlace wa.me construido desde el copy EDITADO y
     nota de voz desde el guion EDITADO."""
     copy_editado = st.text_area("Copy WhatsApp:", value=wa.mensaje_texto, height=110, key=f"{prefijo}_copy")
     guion_editado = st.text_area("Guion nota de voz:", value=wa.guion_nota_voz, height=150, key=f"{prefijo}_script")
-    st.markdown(f"[🔗 Abrir en WhatsApp con este copy]({link_whatsapp(copy_editado)})")
+    st.markdown(f"[🔗 Abrir en WhatsApp con este copy]({link_whatsapp(copy_editado, campana)})")
     if st.button("🎧 Generar nota de voz", key=f"{prefijo}_audio"):
         with st.spinner("Sintetizando audio (voz es-CO Gonzalo)..."):
             audio = generar_audio_elevenlabs(guion_editado)
@@ -431,19 +436,64 @@ tab_campanas, tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp,
 # ==========================================
 # --- PESTAÑA: CAMPAÑAS (plataforma + brief + calendario + memoria) ---
 # ==========================================
+@st.cache_data(ttl=300, show_spinner=False)
+def lotes_disponibles(_mkt, categorias: tuple, limite: int = 200):
+    """Inventario disponible (stock ≥ 20) con su planta y municipio, para
+    anclar las piezas de venta del calendario a un lote real."""
+    inv = (
+        _mkt.table("inventario").select("*")
+        .eq("estado_planta", "disponible").gte("stock", 20)
+        .in_("categoria_producto", list(categorias))
+        .order("inventario_id", desc=True).limit(limite).execute().data or []
+    )
+    ids_planta = list({l["planta_id"] for l in inv if l.get("planta_id") is not None})
+    ids_vivero = list({l["vivero_id"] for l in inv if l.get("vivero_id") is not None})
+    plantas = {p["planta_id"]: p for p in (_mkt.table("plantas").select("*").in_("planta_id", ids_planta).execute().data or [])} if ids_planta else {}
+    viveros = {v["vivero_id"]: v for v in (_mkt.table("viveros").select("*").in_("vivero_id", ids_vivero).execute().data or [])} if ids_vivero else {}
+    return inv, plantas, viveros
+
+def lote_real_para(tema: str):
+    """Datos públicos del lote que coincide con el tema, o None."""
+    if not supabase_mkt:
+        return None
+    try:
+        inv, plantas, viveros = lotes_disponibles(supabase_mkt, tuple(CATEGORIAS_CAMPANA_DEFAULT))
+    except Exception:
+        return None
+    lote = cmp.elegir_lote(tema, inv, lambda l: nombre_planta(plantas.get(l.get("planta_id"), {}), l.get("planta_id")))
+    if not lote:
+        return None
+    return datos_publicos_lote(lote, plantas.get(lote.get("planta_id"), {}), viveros.get(lote.get("vivero_id"), {}))
+
 def generar_pieza_calendario(fila: dict, campana: dict) -> dict:
     """Genera la pieza de una fila del calendario con el brief completo
     (idea, mensaje, pilar, rol del canal, ángulo y memoria de la campaña),
     la guarda en el Historial ligada a la campaña y marca la fila."""
     pilar, canal, audiencia = fila.get("pilar"), fila.get("canal"), fila.get("audiencia") or "institucional"
     tema, angulo = fila.get("tema") or "", fila.get("angulo") or ""
+    # Piezas de venta: se anclan a un lote real del inventario (nunca cifras inventadas)
+    lote = lote_real_para(tema) if pilar == "lotes" else None
+    tema_agente = tema
+    if lote:
+        tema_agente = (
+            f"{tema}. DATOS REALES DEL LOTE (no inventes otros): {lote['cantidad']} unidades de "
+            f"{lote['especie']} en {lote['ubicacion']}"
+            + (f", altura {lote['altura']}" if lote.get("altura") else "")
+            + (f", formato {lote['formato']}" if lote.get("formato") else "") + "."
+        )
     brief = cmp.construir_brief(campana, pilar, canal, audiencia, memoria_cache(supabase_ag, campana["id"]), angulo)
     contexto = cmp.contexto_agente(st.session_state.prioridad_estrategica, brief)
     registro, extra = None, {}
 
     if canal == "BLOG":
-        contenido = redactar_articulo_blog(tema, datos_verificables=None, prioridad_estrategica=contexto)
+        datos_lote = tema_agente.split("DATOS REALES DEL LOTE (no inventes otros): ")[-1] if lote else None
+        contenido = redactar_articulo_blog(tema, datos_verificables=datos_lote, prioridad_estrategica=contexto)
         registro = {"tipo_contenido": "BLOG", "titulo": tema, "contenido": contenido}
+    elif canal == "SEO" and lote:
+        art = generar_seo_desde_inventario(lote, prioridad_estrategica=contexto)
+        if art:
+            registro = {"tipo_contenido": "SEO", "titulo": art.titulo_h1, "contenido": art.contenido_md}
+            extra["seo"] = art
     elif canal == "SEO":
         existente = cluster_ya_ejecutado(supabase_ag, tema)
         if existente:
@@ -453,16 +503,16 @@ def generar_pieza_calendario(fila: dict, campana: dict) -> dict:
             registro = {"tipo_contenido": "SEO", "titulo": art.titulo_h1, "contenido": art.contenido_md}
             extra["seo"] = art
     elif canal == "WHATSAPP":
-        wa = generar_campana_whatsapp(objetivo_whatsapp(tema, audiencia, brief), numero=WHATSAPP_NUMERO, audiencia=audiencia, prioridad_estrategica=contexto)
+        wa = generar_campana_whatsapp(objetivo_whatsapp(tema_agente, audiencia, brief), numero=WHATSAPP_NUMERO, audiencia=audiencia, prioridad_estrategica=contexto)
         if wa:
             registro = {"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp ({audiencia}) — {tema}", "contenido": wa.mensaje_texto}
             extra["wa"] = wa
     elif canal == "VIDEO":
         publico = "Viveristas de la Sabana de Bogotá" if audiencia == "viverista" else "Constructoras y Jefes de Compras B2B"
-        contenido = redactar_guion_viral(tema, tipo_publico=publico, prioridad_estrategica=contexto)
+        contenido = redactar_guion_viral(tema_agente, tipo_publico=publico, prioridad_estrategica=contexto)
         registro = {"tipo_contenido": "VIDEO", "titulo": f"Guion Video — {tema}", "contenido": contenido}
     else:
-        contenido = redactar_articulo_seo(tema, prioridad_estrategica=contexto)
+        contenido = redactar_articulo_seo(tema_agente, prioridad_estrategica=contexto)
         registro = {"tipo_contenido": "TEXTO", "titulo": tema, "contenido": contenido}
 
     if not registro or es_error_agente(registro.get("contenido")):
@@ -472,12 +522,16 @@ def generar_pieza_calendario(fila: dict, campana: dict) -> dict:
     filas = insertar_historial(registro, meta)
     if not filas:
         return {"error": "La pieza se generó pero no se pudo guardar en el Historial."}
-    if canal == "SEO":
+    if canal == "SEO" and not lote:
         registrar_cluster_ejecutado(supabase_ag, tema)
     historial_id = filas[0].get("id")
     cmp.actualizar_fila_calendario(supabase_ag, fila["id"], {"estado": "generado", "historial_id": str(historial_id) if historial_id is not None else None})
     refrescar_campanas()
-    return {"registro": registro, **extra}
+    nota = None
+    if pilar == "lotes":
+        nota = (f"Anclada al lote real: {lote['cantidad']} {lote['especie']} en {lote['ubicacion']}." if lote
+                else "No encontré un lote disponible que coincida con este tema: la pieza salió sin cantidades ni disponibilidad. Revísala antes de aprobarla.")
+    return {"registro": registro, "nota": nota, **extra}
 
 with tab_campanas:
     st.subheader("📣 Campañas: la idea que une todas las piezas")
@@ -550,6 +604,8 @@ with tab_campanas:
             if guardar_c:
                 if not (nombre_c.strip() and idea_c.strip() and mensaje_c.strip()):
                     st.warning("Nombre, idea central y mensaje clave son obligatorios: son lo que une todas las piezas.")
+                elif fin_c and fin_c < inicio_c:
+                    st.warning("La fecha de fin no puede ser anterior a la de inicio.")
                 else:
                     datos_c = {
                         "nombre": nombre_c.strip(), "idea_central": idea_c.strip(), "mensaje_clave": mensaje_c.strip(),
@@ -616,17 +672,26 @@ with tab_campanas:
                 st.write("")
                 if st.button("🧠 Proponer calendario con IA", key=f"cal_proponer_{camp_id}"):
                     with st.spinner("Planeando semanas, canales y pilares con continuidad..."):
-                        filas_ia = cmp.generar_calendario(invocar_modelo_seguro, actual, int(semanas_c), int(por_sem_c), memoria_cache(supabase_ag, camp_id))
+                        filas_ia = cmp.generar_calendario(
+                            invocar_modelo_seguro, actual, int(semanas_c), int(por_sem_c), memoria_cache(supabase_ag, camp_id),
+                            marca=MARCA_UI, desde=cmp.inicio_siguiente_calendario(calendario_c),
+                        )
                     if filas_ia:
                         st.session_state[f"cal_prop_{camp_id}"] = filas_ia
                         limpiar_widgets(f"cal_editor_{camp_id}")
                         st.rerun()
                     else:
-                        st.error("La IA no devolvió un calendario válido. Intenta de nuevo.")
+                        st.error("La IA no devolvió un calendario válido (o todas las fechas caen después del fin de la campaña). Intenta de nuevo o amplía la fecha de fin.")
 
             propuesta = st.session_state.get(f"cal_prop_{camp_id}")
             if propuesta:
-                st.caption("Propuesta (no guardada). Edita lo que quieras antes de guardar.")
+                n_venta = sum(1 for f in propuesta if f.get("pilar") == "lotes")
+                pct_marca_prop = round(100 * (len(propuesta) - n_venta) / len(propuesta))
+                st.caption(
+                    f"Propuesta (no guardada): {len(propuesta)} piezas desde {propuesta[0]['fecha']} · "
+                    f"{pct_marca_prop}% marca / {100 - pct_marca_prop}% venta. Edita lo que quieras antes de guardar."
+                    + (" ⚖️ Hay más venta de lo recomendado (cerca de 25%): cambia algunas filas de 'lotes' a otro pilar." if pct_marca_prop < 60 else "")
+                )
                 editada_df = st.data_editor(
                     pd.DataFrame(propuesta),
                     key=f"cal_editor_{camp_id}",
@@ -686,7 +751,13 @@ with tab_campanas:
                         if fila.get("angulo"):
                             st.caption(f"Ángulo: {fila['angulo']}")
                         if fila.get("estado") == "pendiente":
+                            # El tema se puede ajustar antes de generar (p. ej. si el candado SEO
+                            # avisa que ese tema ya existe, o para nombrar una especie con stock).
+                            tema_editado = st.text_input("Tema de la pieza:", value=fila.get("tema") or "", key=f"cal_tema_{fid}")
                             if st.button("✍️ Generar esta pieza con el brief", key=f"cal_gen_{fid}"):
+                                if tema_editado.strip() and tema_editado.strip() != (fila.get("tema") or ""):
+                                    cmp.actualizar_fila_calendario(supabase_ag, fid, {"tema": tema_editado.strip()})
+                                    fila = {**fila, "tema": tema_editado.strip()}
                                 with st.spinner(f"Generando {fila.get('canal')} con la idea, el mensaje y la memoria de la campaña..."):
                                     try:
                                         st.session_state[f"cal_res_{fid}"] = generar_pieza_calendario(fila, actual)
@@ -697,12 +768,14 @@ with tab_campanas:
                             st.caption(f"Estado: {fila.get('estado')} · revísala, edítala y apruébala en 📜 Historial (filtra por esta campaña).")
                         res_fila = st.session_state.get(f"cal_res_{fid}")
                         if res_fila:
+                            if res_fila.get("nota"):
+                                st.caption(f"📦 {res_fila['nota']}")
                             if res_fila.get("error"):
                                 st.error(res_fila["error"])
                             elif res_fila.get("seo"):
                                 mostrar_articulo_seo(res_fila["seo"], f"cal_seo_{fid}")
                             elif res_fila.get("wa"):
-                                bloque_whatsapp(res_fila["wa"], f"cal_wa_{fid}")
+                                bloque_whatsapp(res_fila["wa"], f"cal_wa_{fid}", actual)
                             else:
                                 st.markdown(res_fila["registro"]["contenido"])
                         confirmar_quitar = st.checkbox("Quitar esta fila del calendario", key=f"cal_conf_{fid}")
@@ -1556,6 +1629,8 @@ with tab_historial:
                             with cp3:
                                 st.write("")
                                 if st.button("📢 Guardar publicación", key=f"gpub_{item['id']}"):
+                                    if url_pub.strip() and not fecha_pub:
+                                        fecha_pub = date.today()
                                     supabase_ag.table("historial_contenidos").update({
                                         "fecha_publicacion": fecha_pub.isoformat() if fecha_pub else None,
                                         "url_publicada": url_pub.strip() or None,
