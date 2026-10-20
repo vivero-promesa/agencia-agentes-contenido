@@ -1,5 +1,8 @@
 import streamlit as st
 import os
+import csv
+import io
+from urllib.parse import quote
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -30,33 +33,276 @@ from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrateg
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
 # ==========================================
-st.set_page_config(page_title="Agencia ViveroOnline", layout="wide", page_icon="🌱")
-st.title("🌱 Centro de Comando - ViveroOnline")
+# Nombre de marca visible en la interfaz — un solo lugar para cambiarlo.
+MARCA_UI = "viveroonline.com.co"
+
+st.set_page_config(page_title=f"Agencia {MARCA_UI}", layout="wide", page_icon="🌱")
+st.title(f"🌱 Centro de Comando · {MARCA_UI}")
 
 load_dotenv()
+
+
+def secreto(nombre: str, defecto=None):
+    """Lee primero st.secrets (nube) y luego .env/variables de entorno (local).
+    No revienta si no existe secrets.toml en local."""
+    try:
+        valor = st.secrets.get(nombre)
+        if valor:
+            return valor
+    except Exception:
+        pass
+    return os.getenv(nombre, defecto)
+
 
 # ==========================================
 # ARQUITECTURA DE DOBLE BASE DE DATOS
 # ==========================================
 # 1. MARKETPLACE (solo LECTURA): inventario, plantas, viveros
-url_mkt = st.secrets.get("SUPABASE_URL_EXTERNA")
-key_mkt = st.secrets.get("SUPABASE_SERVICE_KEY")
+url_mkt = secreto("SUPABASE_URL_EXTERNA")
+key_mkt = secreto("SUPABASE_SERVICE_KEY")
 supabase_mkt = create_client(url_mkt, key_mkt) if url_mkt and key_mkt else None
 
 # 2. AGENCIA (LECTURA/ESCRITURA): historial_contenidos, campanas_ejecutadas
-url_ag = st.secrets.get("SUPABASE_URL_AGENCIA")
-key_ag = st.secrets.get("SUPABASE_KEY_AGENCIA")
+url_ag = secreto("SUPABASE_URL_AGENCIA")
+key_ag = secreto("SUPABASE_KEY_AGENCIA")
 supabase_ag = create_client(url_ag, key_ag) if url_ag and key_ag else None
 
-# Prioridad estratégica dinámica (ej. "generar transacciones reales") — se
-# lee una vez al cargar la app y se usa en todos los agentes institucionales.
-if "prioridad_estrategica" not in st.session_state:
-    st.session_state.prioridad_estrategica = obtener_prioridad_estrategica(supabase_ag)
+# Número oficial de WhatsApp de la plataforma (el comprador nunca habla
+# directo con el viverista: la plataforma hace de puente). Se puede cambiar
+# con el secret WHATSAPP_NUMERO sin tocar código.
+WHATSAPP_NUMERO = "".join(ch for ch in str(secreto("WHATSAPP_NUMERO", "573178543819")) if ch.isdigit())
 
-# Dolores del viverista frente a intermediarios — escrito a mano por el
-# usuario (no generado por IA), se lee una vez al cargar la app.
-if "dolores_intermediarios" not in st.session_state:
-    st.session_state.dolores_intermediarios = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_DOLORES_INTERMEDIARIOS)
+# Categorías del inventario que tienen sentido para una campaña de planta viva
+CATEGORIAS_CAMPANA_DEFAULT = ["plantas_ornamentales", "arboles"]
+
+
+# ==========================================
+# HELPERS COMPARTIDOS
+# ==========================================
+def es_error_agente(texto) -> bool:
+    """Los agentes de texto devuelven mensajes tipo '⚠️ Error...' o '❌ Fallo...'
+    en vez de lanzar excepción. Esto evita que esos mensajes se guarden en el
+    Historial como si fueran contenido real."""
+    if not texto or not isinstance(texto, str):
+        return True
+    inicio = texto.strip()[:3]
+    return inicio.startswith("⚠️") or inicio.startswith("❌")
+
+
+def link_whatsapp(texto: str) -> str:
+    """Construye el enlace wa.me de forma determinística (no lo inventa la IA)
+    hacia el número oficial de la plataforma, con el copy codificado."""
+    return f"https://wa.me/{WHATSAPP_NUMERO}?text={quote(texto or '')}"
+
+
+def limpiar_widgets(*keys):
+    """Streamlit ignora el parámetro value= de un widget que ya tiene key en
+    session_state. Si se genera contenido nuevo y no se borran estas keys,
+    la pantalla sigue mostrando el texto VIEJO. Llamar antes de st.rerun()."""
+    for k in keys:
+        st.session_state.pop(k, None)
+
+
+def guardar_en_historial(registros) -> int:
+    """Inserta en historial_contenidos solo lo que es contenido real (descarta
+    vacíos y mensajes de error de los agentes). Devuelve cuántos guardó."""
+    if not supabase_ag:
+        st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+        return 0
+    if isinstance(registros, dict):
+        registros = [registros]
+    validos = [r for r in registros if not es_error_agente(r.get("contenido"))]
+    descartados = len(registros) - len(validos)
+    if descartados:
+        st.warning(f"{descartados} pieza(s) no se guardaron porque el agente devolvió un error o vino vacía.")
+    if not validos:
+        return 0
+    for r in validos:
+        r.setdefault("estado", "borrador")
+    try:
+        supabase_ag.table("historial_contenidos").insert(validos).execute()
+        return len(validos)
+    except Exception as e:
+        st.error(f"No se pudo guardar en el Historial: {e}")
+        return 0
+
+
+def nombre_planta(planta: dict, planta_id=None) -> str:
+    """Prefiere nombre común + científico (el comprador busca por nombre común).
+    Antes el escáner tomaba la primera columna con 'nombre' → nombre_cientifico."""
+    planta = planta or {}
+    comun = planta.get("nombre_comun")
+    cientifico = planta.get("nombre_cientifico")
+    if comun and cientifico and comun.strip().lower() != cientifico.strip().lower():
+        return f"{comun} ({cientifico})"
+    if comun or cientifico:
+        return comun or cientifico
+    # Respaldo: escáner dinámico por si cambian los nombres de columnas
+    for k, v in planta.items():
+        if ("nombre" in k.lower() or "especie" in k.lower()) and v:
+            return v
+    return f"Planta #{planta_id}" if planta_id is not None else "Planta"
+
+
+def municipio_vivero(vivero: dict) -> str:
+    """Municipio público del lote. 'ubicacion' viene vacío en la BD real, por
+    eso antes todo salía como 'Sabana de Bogotá'. Nunca se usa la dirección."""
+    vivero = vivero or {}
+    return (
+        vivero.get("ciudad")
+        or vivero.get("municipio")
+        or (vivero.get("ubicacion") if isinstance(vivero.get("ubicacion"), str) else None)
+        or "Sabana de Bogotá"
+    )
+
+
+def datos_publicos_lote(item: dict, planta: dict, vivero: dict) -> dict:
+    """Datos que SÍ pueden ir en contenido público. El nombre del vivero NO se
+    publica: el comprador no contacta al viverista, la plataforma hace de puente
+    (y publicarlo invita a saltarse el marketplace)."""
+    municipio = municipio_vivero(vivero)
+    datos = {
+        "especie": nombre_planta(planta, item.get("planta_id")),
+        "cantidad": item.get("stock"),
+        "ubicacion": municipio,
+        "vendedor": f"Vivero aliado verificado de {MARCA_UI} en {municipio}",
+    }
+    if item.get("altura_cm"):
+        altura = f"{item['altura_cm']} cm"
+        if item.get("altura_cm_max"):
+            altura = f"{item['altura_cm']}–{item['altura_cm_max']} cm"
+        datos["altura"] = altura
+    if item.get("formato_comercial"):
+        datos["formato"] = item["formato_comercial"]
+    if (planta or {}).get("uso_paisajistico"):
+        datos["uso_paisajistico"] = planta["uso_paisajistico"]
+    if (planta or {}).get("clima_ideal"):
+        datos["clima_ideal"] = planta["clima_ideal"]
+    return datos
+
+
+def mostrar_articulo_seo(articulo, prefijo: str):
+    """Muestra H1, slug y meta description (antes se generaban pero nunca se
+    mostraban) + el cuerpo, con descarga en Markdown para WordPress."""
+    st.markdown(f"### {articulo.titulo_h1}")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Slug sugerido")
+        st.code(getattr(articulo, "slug", "") or "", language=None)
+    with c2:
+        st.caption("Meta description")
+        st.code(getattr(articulo, "meta_description", "") or "", language=None)
+    st.markdown(articulo.contenido_md)
+    st.download_button(
+        "⬇️ Descargar .md",
+        data=f"# {articulo.titulo_h1}\n\n{articulo.contenido_md}",
+        file_name=f"{(getattr(articulo, 'slug', '') or 'articulo').strip('/')}.md",
+        mime="text/markdown",
+        key=f"{prefijo}_descargar_md",
+    )
+
+
+def bloque_whatsapp(wa, prefijo: str):
+    """Copy + guion editables, enlace wa.me construido desde el copy EDITADO y
+    nota de voz desde el guion EDITADO."""
+    copy_editado = st.text_area("Copy WhatsApp:", value=wa.mensaje_texto, height=110, key=f"{prefijo}_copy")
+    guion_editado = st.text_area("Guion nota de voz:", value=wa.guion_nota_voz, height=150, key=f"{prefijo}_script")
+    st.markdown(f"[🔗 Abrir en WhatsApp con este copy]({link_whatsapp(copy_editado)})")
+    if st.button("🎧 Generar nota de voz", key=f"{prefijo}_audio"):
+        with st.spinner("Sintetizando audio (voz es-CO Gonzalo)..."):
+            audio = generar_audio_elevenlabs(guion_editado)
+            if audio:
+                st.audio(audio, format="audio/mp3")
+                st.download_button("⬇️ Descargar audio", data=audio, file_name="nota_de_voz.mp3", mime="audio/mpeg", key=f"{prefijo}_audio_dl")
+            else:
+                st.warning("No se pudo generar el audio.")
+    return copy_editado, guion_editado
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def lotes_pendientes(_mkt, _ag, categorias: tuple, limite: int = 200):
+    """Lotes disponibles (stock ≥ 20) de las categorías elegidas que todavía no
+    tienen campaña. Cache de 5 minutos para no consultar en cada clic."""
+    q = (
+        _mkt.table("inventario").select("*")
+        .eq("estado_planta", "disponible").gte("stock", 20)
+    )
+    if categorias:
+        q = q.in_("categoria_producto", list(categorias))
+    inv = q.order("inventario_id", desc=True).limit(limite).execute().data or []
+    hechos = _ag.table("campanas_ejecutadas").select("inventario_id").execute().data or []
+    procesados = {c["inventario_id"] for c in hechos}
+    pendientes = [l for l in inv if l["inventario_id"] not in procesados]
+    ids_planta = list({l["planta_id"] for l in pendientes if l.get("planta_id") is not None})
+    ids_vivero = list({l["vivero_id"] for l in pendientes if l.get("vivero_id") is not None})
+    plantas = {p["planta_id"]: p for p in (_mkt.table("plantas").select("*").in_("planta_id", ids_planta).execute().data or [])} if ids_planta else {}
+    viveros = {v["vivero_id"]: v for v in (_mkt.table("viveros").select("*").in_("vivero_id", ids_vivero).execute().data or [])} if ids_vivero else {}
+    return pendientes, plantas, viveros
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def kpis_historial(_ag):
+    filas = _ag.table("historial_contenidos").select("tipo_contenido, estado, genero_venta").execute().data or []
+    total = len(filas)
+    aprobados = sum(1 for f in filas if (f.get("estado") or "borrador") == "aprobado")
+    ventas = sum(1 for f in filas if f.get("genero_venta") is True)
+    con_dato = sum(1 for f in filas if f.get("genero_venta") is not None)
+    return {"total": total, "aprobados": aprobados, "borradores": total - aprobados, "ventas": ventas, "con_dato": con_dato}
+
+
+def cargar_estrategia(forzar: bool = False):
+    if forzar or "prioridad_estrategica" not in st.session_state:
+        st.session_state.prioridad_estrategica = obtener_prioridad_estrategica(supabase_ag)
+    if forzar or "dolores_intermediarios" not in st.session_state:
+        st.session_state.dolores_intermediarios = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_DOLORES_INTERMEDIARIOS)
+    if forzar or "estrategia_competitiva" not in st.session_state:
+        st.session_state.estrategia_competitiva = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_ESTRATEGIA_COMPETITIVA)
+
+
+# Prioridad, dolores y competencia — se leen una vez por sesión (y se pueden
+# recargar desde la barra lateral si se editaron en otra pestaña/dispositivo).
+cargar_estrategia()
+
+# ==========================================
+# BARRA LATERAL: ESTADO DEL SISTEMA
+# ==========================================
+with st.sidebar:
+    st.header("🩺 Estado del sistema")
+    estado_conexiones = {
+        "Marketplace (lectura)": bool(supabase_mkt),
+        "Agencia (escritura)": bool(supabase_ag),
+        "Groq (textos)": bool(secreto("GROQ_API_KEY")),
+        "Gemini (SEO / WhatsApp / FAQ)": bool(secreto("GEMINI_API_KEY")),
+    }
+    for nombre, ok in estado_conexiones.items():
+        st.write(("🟢 " if ok else "🔴 ") + nombre)
+
+    st.markdown("---")
+    st.subheader("🧭 Estrategia cargada")
+    st.write(("🟢" if (st.session_state.prioridad_estrategica or "").strip() else "⚪") + " Prioridad actual")
+    st.write(("🟢" if (st.session_state.dolores_intermediarios or "").strip() else "⚪") + " Dolores frente a intermediarios")
+    st.write(("🟢" if (st.session_state.estrategia_competitiva or "").strip() else "⚪") + " Estrategia competitiva")
+    if not (st.session_state.estrategia_competitiva or "").strip():
+        st.caption("La estrategia competitiva está vacía: el pitch competitivo y la propuesta no pueden funcionar hasta que la escribas.")
+    if st.button("🔄 Recargar desde Supabase"):
+        cargar_estrategia(forzar=True)
+        lotes_pendientes.clear()
+        kpis_historial.clear()
+        limpiar_widgets("txt_prioridad", "txt_dolores", "txt_competencia")
+        st.rerun()
+
+    if supabase_ag:
+        st.markdown("---")
+        st.subheader("📊 Resultados")
+        try:
+            k = kpis_historial(supabase_ag)
+            c1, c2 = st.columns(2)
+            c1.metric("Piezas", k["total"])
+            c2.metric("Aprobadas", k["aprobados"])
+            c1.metric("Con venta", k["ventas"])
+            c2.metric("Con dato de venta", k["con_dato"])
+        except Exception as e:
+            st.caption(f"No se pudieron leer los KPIs: {e}")
 
 # ==========================================
 # ARQUITECTURA DE PESTAÑAS
@@ -66,7 +312,7 @@ tab_competencia, tab_estrategia, tab_360, tab_texto, tab_whatsapp, tab_video, ta
 ])
 
 # ==========================================
-# --- PESTAÑA NUEVA: ESTRATEGIA ---
+# --- PESTAÑA: ESTRATEGIA ---
 # ==========================================
 with tab_estrategia:
     st.subheader("Prioridad Estratégica Actual")
@@ -79,8 +325,11 @@ with tab_estrategia:
     nueva_prioridad = st.text_area(
         "Prioridad actual:",
         value=st.session_state.prioridad_estrategica,
-        height=150
+        height=150,
+        key="txt_prioridad"
     )
+    if nueva_prioridad != st.session_state.prioridad_estrategica:
+        st.caption("✏️ Tienes cambios sin guardar — los agentes siguen usando la versión guardada.")
     if st.button("💾 Guardar Prioridad"):
         if not supabase_ag:
             st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
@@ -104,8 +353,11 @@ with tab_estrategia:
         "Dolores frente a intermediarios:",
         value=st.session_state.dolores_intermediarios,
         height=150,
-        placeholder="Ej: El viverista pierde entre 30-40% del margen con intermediarios que no aportan logística ni visibilidad real..."
+        placeholder="Ej: El viverista pierde entre 30-40% del margen con intermediarios que no aportan logística ni visibilidad real...",
+        key="txt_dolores"
     )
+    if nuevos_dolores != st.session_state.dolores_intermediarios:
+        st.caption("✏️ Tienes cambios sin guardar.")
     if st.button("💾 Guardar Dolores"):
         if not supabase_ag:
             st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
@@ -167,6 +419,7 @@ with tab_estrategia:
                         texto_res = redactar_articulo_seo(tema_campana_estrategia, prioridad_estrategica=prioridad_actual)
                         wa_res = generar_campana_whatsapp(
                             tema_campana_estrategia,
+                            numero=WHATSAPP_NUMERO,
                             audiencia=audiencia_campana_estrategia,
                             prioridad_estrategica=prioridad_actual
                         )
@@ -177,19 +430,21 @@ with tab_estrategia:
                             prioridad_estrategica=prioridad_actual
                         )
 
-                        # Guardado en Historial (misma tabla y esquema que Campaña 360)
-                        # estado: "borrador" — nada se considera aprobado/listo hasta
-                        # que se revise a mano en la pestaña Historial.
+                        # estado "borrador": nada se considera listo hasta revisarlo en Historial.
+                        # guardar_en_historial descarta vacíos y mensajes de error de los agentes.
                         registros = [
-                            {"tipo_contenido": "TEXTO", "titulo": tema_campana_estrategia, "contenido": texto_res or "", "estado": "borrador"},
-                            {"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp — {tema_campana_estrategia}", "contenido": wa_res.mensaje_texto if wa_res else "", "estado": "borrador"},
-                            {"tipo_contenido": "VIDEO", "titulo": f"Guion Video — {tema_campana_estrategia}", "contenido": video_res or "", "estado": "borrador"},
+                            {"tipo_contenido": "TEXTO", "titulo": tema_campana_estrategia, "contenido": texto_res},
+                            {"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp — {tema_campana_estrategia}", "contenido": wa_res.mensaje_texto if wa_res else ""},
+                            {"tipo_contenido": "VIDEO", "titulo": f"Guion Video — {tema_campana_estrategia}", "contenido": video_res},
                         ]
                         if seo_res:
-                            registros.append({"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md, "estado": "borrador"})
-                            registrar_cluster_ejecutado(supabase_ag, tema_campana_estrategia)
+                            registros.append({"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md})
 
-                        supabase_ag.table("historial_contenidos").insert(registros).execute()
+                        guardados = guardar_en_historial(registros)
+                        # El candado SEO se cierra solo si el artículo SEO sí se generó
+                        if seo_res:
+                            registrar_cluster_ejecutado(supabase_ag, tema_campana_estrategia)
+                        kpis_historial.clear()
 
                         st.session_state.campana_estrategia_data = {
                             "tema": tema_campana_estrategia,
@@ -197,23 +452,27 @@ with tab_estrategia:
                             "wa": wa_res,
                             "video": video_res,
                             "seo": seo_res,
+                            "guardados": guardados,
                         }
                         st.session_state.campana_estrategia_lista = True
+                        limpiar_widgets("ce_wa_copy", "ce_wa_script")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error generando la campaña desde estrategia: {e}")
 
     if st.session_state.get("campana_estrategia_lista"):
         data = st.session_state.campana_estrategia_data
-        st.success(f"Campaña generada y guardada en el Historial — tema: {data['tema']}")
+        st.success(f"Campaña generada — tema: {data['tema']} · {data.get('guardados', 0)} pieza(s) guardadas en el Historial como borrador.")
 
         with st.expander("📝 Texto", expanded=True):
-            st.write(data["texto"])
+            if es_error_agente(data["texto"]):
+                st.warning(data["texto"] or "El agente de texto no devolvió resultado.")
+            else:
+                st.write(data["texto"])
 
         with st.expander("💬 WhatsApp"):
             if data["wa"]:
-                st.text_area("Copy:", value=data["wa"].mensaje_texto, height=100, key="ce_wa_copy")
-                st.text_area("Guion nota de voz:", value=data["wa"].guion_nota_voz, height=150, key="ce_wa_script")
+                bloque_whatsapp(data["wa"], "ce_wa")
             else:
                 st.warning("El agente de WhatsApp no devolvió resultado.")
 
@@ -222,15 +481,12 @@ with tab_estrategia:
 
         with st.expander("🚀 SEO Proactivo"):
             if data["seo"]:
-                st.markdown(f"### {data['seo'].titulo_h1}")
-                st.markdown(data["seo"].contenido_md)
+                mostrar_articulo_seo(data["seo"], "ce_seo")
             else:
-                st.warning("El agente de SEO no devolvió resultado.")
-
-
+                st.warning("El agente de SEO no devolvió resultado (el candado anti-duplicidad NO se cerró, puedes reintentar).")
 
 # ==========================================
-# --- PESTAÑA 1: TEXTOS ---
+# --- PESTAÑA: TEXTOS ---
 # ==========================================
 with tab_texto:
     st.subheader("Redacción de Artículos y Copy B2B")
@@ -241,21 +497,39 @@ with tab_texto:
             with st.spinner("El agente está redactando..."):
                 try:
                     resultado_texto = redactar_articulo_seo(tema_texto, prioridad_estrategica=st.session_state.prioridad_estrategica)
-                    if resultado_texto:
-                        st.success("Texto generado con éxito.")
-                        st.write(resultado_texto)
+                    if es_error_agente(resultado_texto):
+                        st.error(resultado_texto or "El agente no devolvió respuesta.")
                     else:
-                        st.error("El agente no devolvió respuesta.")
+                        st.session_state.texto_data = {"tema": tema_texto, "contenido": resultado_texto}
+                        st.session_state.texto_guardado = False
                 except Exception as e:
                     st.error(f"Error técnico: {e}")
         else:
             st.warning("Por favor ingresa un tema.")
 
+    # Renderizado persistente: antes el texto desaparecía con cualquier clic
+    if st.session_state.get("texto_data"):
+        data = st.session_state.texto_data
+        st.success(f"Texto generado — tema: {data['tema']}")
+        st.write(data["contenido"])
+        if st.session_state.get("texto_guardado"):
+            st.caption("✅ Ya está en el Historial.")
+        elif st.button("💾 Guardar en Historial como borrador", key="texto_guardar"):
+            if guardar_en_historial({"tipo_contenido": "TEXTO", "titulo": data["tema"], "contenido": data["contenido"]}):
+                st.session_state.texto_guardado = True
+                kpis_historial.clear()
+                st.success("Guardado en el Historial como borrador.")
+
 # ==========================================
-# --- PESTAÑA 2: WHATSAPP ---
+# --- PESTAÑA: WHATSAPP ---
 # ==========================================
 with tab_whatsapp:
     st.subheader("Captación Directa (Fricción Cero)")
+    st.caption(
+        "Texto para copiar y enviar a mano (no está conectado a la API de Meta). "
+        f"El enlace siempre apunta al WhatsApp oficial de la plataforma (+{WHATSAPP_NUMERO}): "
+        "el comprador nunca habla directo con el viverista."
+    )
     audiencia_wa = st.radio(
         "¿A quién le escribes?",
         options=["institucional", "viverista"],
@@ -267,32 +541,37 @@ with tab_whatsapp:
     if st.button("Generar Kit de WhatsApp"):
         if obj_wa:
             with st.spinner("Conectando con Agente de Crecimiento..."):
-                campana = generar_campana_whatsapp(obj_wa, audiencia=audiencia_wa, prioridad_estrategica=st.session_state.prioridad_estrategica)
+                campana = generar_campana_whatsapp(obj_wa, numero=WHATSAPP_NUMERO, audiencia=audiencia_wa, prioridad_estrategica=st.session_state.prioridad_estrategica)
                 if campana:
-                    st.session_state.wa_copy = campana.mensaje_texto
-                    st.session_state.wa_script = campana.guion_nota_voz
-                    st.session_state.wa_generado = True
-                    st.success("Kit generado con éxito.")
+                    st.session_state.wa_kit = campana
+                    st.session_state.wa_kit_meta = {"objetivo": obj_wa, "audiencia": audiencia_wa}
+                    st.session_state.wa_guardado = False
+                    # Sin esto, un segundo kit seguía mostrando el texto del primero
+                    limpiar_widgets("wa_copy", "wa_script")
+                    st.rerun()
                 else:
                     st.error("El agente de crecimiento no pudo responder.")
         else:
             st.warning("Por favor ingresa un objetivo.")
 
     # Renderizado persistente (el botón de audio funciona sin borrar pantalla)
-    if st.session_state.get("wa_generado"):
-        copy_actual = st.text_area("Copy WhatsApp:", value=st.session_state.wa_copy, height=100, key="wa_copy_editable")
-        script_actual = st.text_area("Guion nota de voz:", value=st.session_state.wa_script, height=150, key="wa_script_editable")
+    if st.session_state.get("wa_kit"):
+        meta = st.session_state.wa_kit_meta
+        st.success(f"Kit para {'viverista' if meta['audiencia'] == 'viverista' else 'comprador institucional'} — {meta['objetivo']}")
+        copy_actual, _ = bloque_whatsapp(st.session_state.wa_kit, "wa")
         st.markdown("---")
-        if st.button("🎧 Generar Nota de Voz con ElevenLabs"):
-            with st.spinner("Sintetizando audio..."):
-                audio = generar_audio_elevenlabs(script_actual)
-                if audio:
-                    st.audio(audio, format="audio/mp3")
-                else:
-                    st.warning("No se pudo generar el audio.")
+        if st.session_state.get("wa_guardado"):
+            st.caption("✅ Ya está en el Historial.")
+        elif st.button("💾 Guardar copy en Historial", key="wa_guardar"):
+            if guardar_en_historial({"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp ({meta['audiencia']}) — {meta['objetivo']}", "contenido": copy_actual}):
+                st.session_state.wa_guardado = True
+                kpis_historial.clear()
+                st.success("Guardado en el Historial como borrador.")
 
 # ==========================================
-# --- PESTAÑA 3: VIDEO (B-Roll y Producción Veo 3.1) ---
+# --- PESTAÑA: VIDEO (B-Roll y Producción Veo 3.1) ---
+# Sin cambios: el módulo de video se queda tal como está (se opera a mano
+# con Google Vids).
 # ==========================================
 with tab_video:
     st.subheader("🎬 Producción de Video B2B (Veo 3.1)")
@@ -356,7 +635,7 @@ with tab_video:
                     st.error(f"Error crítico en el orquestador: {e}")
 
 # ==========================================
-# --- PESTAÑA 4: SEO PROGRAMÁTICO (lee del MARKETPLACE) ---
+# --- PESTAÑA: SEO PROGRAMÁTICO (lee del MARKETPLACE) ---
 # ==========================================
 with tab_seo:
     st.subheader("Trigger SEO: Generador de Artículos B2B")
@@ -368,88 +647,99 @@ with tab_seo:
     )
 
     if modo_seo == "📡 Automatizado (Base de Datos)":
+        st.caption("Toma el lote disponible más reciente (stock ≥ 20) de plantas ornamentales o árboles. El nombre del vivero no se publica.")
         if st.button("Analizar BD y Generar SEO"):
             if not supabase_mkt:
                 st.error("Falta configurar la conexión al Marketplace en los Secrets (SUPABASE_URL_EXTERNA / SUPABASE_SERVICE_KEY).")
             else:
-                with st.spinner("Decodificando esquema de base de datos y generando contenido..."):
+                with st.spinner("Leyendo inventario y generando contenido..."):
                     try:
-                        # 1. Último registro de inventario (Blindaje B2B)
                         res_inv = supabase_mkt.table("inventario") \
                             .select("*") \
                             .eq("estado_planta", "disponible") \
                             .gte("stock", 20) \
+                            .in_("categoria_producto", CATEGORIAS_CAMPANA_DEFAULT) \
                             .order("inventario_id", desc=True) \
                             .limit(1) \
                             .execute()
 
                         if not res_inv.data:
-                            st.warning("No hay inventario 'disponible' con más de 20 unidades en este momento.")
+                            st.warning("No hay inventario 'disponible' con 20 o más unidades en este momento.")
                         else:
                             item = res_inv.data[0]
+                            planta_rows = supabase_mkt.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data
+                            vivero_rows = supabase_mkt.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data
+                            planta_data = planta_rows[0] if planta_rows else {}
+                            vivero_data = vivero_rows[0] if vivero_rows else {}
 
-                            planta_data = supabase_mkt.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
-                            vivero_data = supabase_mkt.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
-
-                            # ESCÁNER DINÁMICO DE NOMBRES PARA PLANTA
-                            cols_nombre_planta = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
-                            nombre_especie = planta_data[cols_nombre_planta[0]] if cols_nombre_planta else f"Planta_ID_{item['planta_id']}"
-
-                            # ESCÁNER DINÁMICO DE NOMBRES PARA VIVERO
-                            cols_nombre_vivero = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
-                            nombre_vivero = vivero_data[cols_nombre_vivero[0]] if cols_nombre_vivero else f"Vivero_ID_{item['vivero_id']}"
-
-                            locacion = (
-                                vivero_data.get("ubicacion") or
-                                vivero_data.get("ciudad") or
-                                vivero_data.get("municipio") or
-                                "Sabana de Bogotá"
+                            datos_auto = datos_publicos_lote(item, planta_data, vivero_data)
+                            st.write(
+                                f"📊 **Datos extraídos:** {datos_auto['especie']} | Stock: {datos_auto['cantidad']} | "
+                                f"{datos_auto['ubicacion']} · interno: {vivero_data.get('nombre_vivero', 'vivero sin nombre')} (no se publica)"
                             )
-
-                            st.write(f"📊 **Datos extraídos:** {nombre_especie} | Stock: {item['stock']} | Ubicación: {locacion} ({nombre_vivero})")
-
-                            datos_auto = {
-                                "especie": nombre_especie,
-                                "cantidad": item["stock"],
-                                "ubicacion": locacion,
-                                "vendedor": nombre_vivero
-                            }
 
                             articulo = generar_seo_desde_inventario(datos_auto, prioridad_estrategica=st.session_state.prioridad_estrategica)
                             if articulo:
-                                st.success("¡Artículo estratégico B2B generado con éxito!")
-                                st.markdown(f"### {articulo.titulo_h1}")
-                                st.markdown(articulo.contenido_md)
+                                st.session_state.seo_auto = articulo
+                                st.session_state.seo_auto_guardado = False
                             else:
                                 st.error("El motor de IA no devolvió un formato válido.")
                     except Exception as e:
                         st.error(f"Error en la consulta automática: {e}")
 
+        if st.session_state.get("seo_auto"):
+            st.success("Artículo estratégico B2B generado.")
+            mostrar_articulo_seo(st.session_state.seo_auto, "seo_auto")
+            if st.session_state.get("seo_auto_guardado"):
+                st.caption("✅ Ya está en el Historial.")
+            elif st.button("💾 Guardar en Historial como borrador", key="seo_auto_guardar"):
+                a = st.session_state.seo_auto
+                if guardar_en_historial({"tipo_contenido": "SEO", "titulo": a.titulo_h1, "contenido": a.contenido_md}):
+                    st.session_state.seo_auto_guardado = True
+                    kpis_historial.clear()
+                    st.success("Guardado en el Historial como borrador.")
+
     elif modo_seo == "✍️ Ingreso Manual":
         col1, col2 = st.columns(2)
         with col1:
             man_especie = st.text_input("Especie de planta:", placeholder="Ej: Palma Areca")
-            man_vendedor = st.text_input("Nombre del Vivero:", placeholder="Ej: Vivero El Edén")
+            man_altura = st.text_input("Altura / formato (opcional):", placeholder="Ej: 1,50 m en bolsa de 20 L")
         with col2:
             man_cantidad = st.number_input("Cantidad (Stock):", min_value=1, value=500)
-            man_ubicacion = st.text_input("Ubicación del lote:", placeholder="Ej: Chía")
+            man_ubicacion = st.text_input("Municipio del lote:", placeholder="Ej: Chía")
+        st.caption("El nombre del vivero ya no se pide: no se publica en contenido (la plataforma hace de puente con el comprador).")
 
         if st.button("Generar Artículo Manual"):
-            if man_especie and man_vendedor and man_ubicacion:
+            if man_especie and man_ubicacion:
                 with st.spinner("Redactando artículo estratégico..."):
                     datos_manuales = {
                         "especie": man_especie,
                         "cantidad": man_cantidad,
                         "ubicacion": man_ubicacion,
-                        "vendedor": man_vendedor
+                        "vendedor": f"Vivero aliado verificado de {MARCA_UI} en {man_ubicacion}",
                     }
+                    if man_altura:
+                        datos_manuales["altura_formato"] = man_altura
                     articulo = generar_seo_desde_inventario(datos_manuales, prioridad_estrategica=st.session_state.prioridad_estrategica)
                     if articulo:
-                        st.success("Artículo manual generado exitosamente.")
-                        st.markdown(f"### {articulo.titulo_h1}")
-                        st.markdown(articulo.contenido_md)
+                        st.session_state.seo_manual = articulo
+                        st.session_state.seo_manual_guardado = False
+                    else:
+                        st.error("El motor de IA no devolvió un formato válido.")
             else:
-                st.warning("Completa los campos requeridos para proceder.")
+                st.warning("Completa especie y municipio para continuar.")
+
+        if st.session_state.get("seo_manual"):
+            st.success("Artículo manual generado.")
+            mostrar_articulo_seo(st.session_state.seo_manual, "seo_manual")
+            if st.session_state.get("seo_manual_guardado"):
+                st.caption("✅ Ya está en el Historial.")
+            elif st.button("💾 Guardar en Historial como borrador", key="seo_manual_guardar"):
+                a = st.session_state.seo_manual
+                if guardar_en_historial({"tipo_contenido": "SEO", "titulo": a.titulo_h1, "contenido": a.contenido_md}):
+                    st.session_state.seo_manual_guardado = True
+                    kpis_historial.clear()
+                    st.success("Guardado en el Historial como borrador.")
 
     else:
         st.caption(
@@ -487,95 +777,122 @@ with tab_seo:
                             prioridad_estrategica=st.session_state.prioridad_estrategica
                         )
                         if articulo:
-                            st.success("Artículo proactivo generado con éxito.")
-                            st.markdown(f"### {articulo.titulo_h1}")
-                            st.markdown(articulo.contenido_md)
-                            if supabase_ag:
-                                supabase_ag.table("historial_contenidos").insert({
-                                    "tipo_contenido": "SEO",
-                                    "titulo": articulo.titulo_h1,
-                                    "contenido": articulo.contenido_md,
-                                    "estado": "borrador"
-                                }).execute()
+                            st.session_state.seo_proactivo = articulo
+                            if supabase_ag and guardar_en_historial({"tipo_contenido": "SEO", "titulo": articulo.titulo_h1, "contenido": articulo.contenido_md}):
                                 registrar_cluster_ejecutado(supabase_ag, cluster_seo)
-                                st.caption("Guardado en el Historial como borrador.")
+                                kpis_historial.clear()
+                                st.session_state.seo_proactivo_nota = "Guardado en el Historial como borrador y cluster registrado."
+                            else:
+                                st.session_state.seo_proactivo_nota = "⚠️ No se guardó en el Historial (revisa la conexión a la Agencia)."
                         else:
                             st.error("El motor de IA no devolvió un formato válido.")
 
+        if st.session_state.get("seo_proactivo"):
+            st.success("Artículo proactivo generado.")
+            st.caption(st.session_state.get("seo_proactivo_nota", ""))
+            mostrar_articulo_seo(st.session_state.seo_proactivo, "seo_proactivo")
+
 # ==========================================
-# --- PESTAÑA 5: ORQUESTADOR 360 ---
+# --- PESTAÑA: ORQUESTADOR 360 ---
 # LEE del Marketplace | ESCRIBE en la Agencia
 # ==========================================
 with tab_360:
     st.subheader("🔥 Orquestador Maestro de Campaña 360")
     st.markdown("Lee el inventario del **Marketplace**, genera la campaña (SEO, WhatsApp y Video) y la guarda en la base de la **Agencia**.")
 
-    if st.button("⚡ Lanzar Campaña 360", type="primary"):
-        if not supabase_mkt:
-            st.error("Falta la conexión al Marketplace (SUPABASE_URL_EXTERNA / SUPABASE_SERVICE_KEY).")
-        elif not supabase_ag:
-            st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+    if not supabase_mkt:
+        st.error("Falta la conexión al Marketplace (SUPABASE_URL_EXTERNA / SUPABASE_SERVICE_KEY).")
+    elif not supabase_ag:
+        st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
+    else:
+        categorias_sel = st.multiselect(
+            "Categorías del inventario:",
+            options=["plantas_ornamentales", "arboles", "sustrato", "accesorios"],
+            default=CATEGORIAS_CAMPANA_DEFAULT,
+            help="Por defecto solo planta viva: sustrato y accesorios no encajan con un guion de 'revisión de calidad de la planta'."
+        )
+        try:
+            pendientes, plantas_idx, viveros_idx = lotes_pendientes(supabase_mkt, supabase_ag, tuple(sorted(categorias_sel)))
+        except Exception as e:
+            pendientes, plantas_idx, viveros_idx = [], {}, {}
+            st.error(f"No se pudo leer el inventario: {e}")
+
+        if not pendientes:
+            st.info("Todos los lotes disponibles de estas categorías ya tienen campaña.")
         else:
-            with st.spinner("Sincronizando agentes y ejecutando campaña..."):
-                try:
-                    # 1. Lógica de Lotes Frescos
-                    #    Inventario: se lee del MARKETPLACE
-                    #    Candado de campañas: se lee de la AGENCIA
-                    res_inv = supabase_mkt.table("inventario").select("*").eq("estado_planta", "disponible").gte("stock", 20).order("inventario_id", desc=True).limit(10).execute()
-                    res_campanas = supabase_ag.table("campanas_ejecutadas").select("inventario_id").execute()
-                    lotes_procesados = [c["inventario_id"] for c in res_campanas.data] if res_campanas.data else []
-                    item = next((l for l in res_inv.data if l["inventario_id"] not in lotes_procesados), None)
+            def _etiqueta_lote(l):
+                p = plantas_idx.get(l.get("planta_id"), {})
+                v = viveros_idx.get(l.get("vivero_id"), {})
+                return f"#{l['inventario_id']} · {nombre_planta(p, l.get('planta_id'))} · {l.get('stock')} und · {municipio_vivero(v)}"
 
-                    if not item:
-                        st.info("Todos los lotes actuales ya tienen campaña.")
-                    else:
-                        # Extraer datos dinámicos (MARKETPLACE)
-                        planta_data = supabase_mkt.table("plantas").select("*").eq("planta_id", item["planta_id"]).execute().data[0]
-                        vivero_data = supabase_mkt.table("viveros").select("*").eq("vivero_id", item["vivero_id"]).execute().data[0]
+            st.caption(f"{len(pendientes)} lote(s) sin campaña. Por defecto se propone el más reciente; puedes elegir otro.")
+            lote_sel = st.selectbox("Lote para la campaña:", options=pendientes, format_func=_etiqueta_lote, key="c360_lote")
 
-                        cols_nombre_p = [k for k in planta_data.keys() if "nombre" in k.lower() or "especie" in k.lower()]
-                        nombre_especie = planta_data[cols_nombre_p[0]] if cols_nombre_p else "Planta"
+            if st.button("⚡ Lanzar Campaña 360", type="primary"):
+                with st.spinner("Sincronizando agentes y ejecutando campaña..."):
+                    try:
+                        item = lote_sel
+                        planta_data = plantas_idx.get(item.get("planta_id"), {})
+                        vivero_data = viveros_idx.get(item.get("vivero_id"), {})
+                        datos = datos_publicos_lote(item, planta_data, vivero_data)
+                        especie, locacion = datos["especie"], datos["ubicacion"]
+                        prioridad = st.session_state.prioridad_estrategica
 
-                        cols_nombre_v = [k for k in vivero_data.keys() if "nombre" in k.lower() or "vendedor" in k.lower()]
-                        nombre_vivero = vivero_data[cols_nombre_v[0]] if cols_nombre_v else "Vivero Partner"
+                        seo_res = generar_seo_desde_inventario(datos, prioridad_estrategica=prioridad)
+                        wa_res = generar_campana_whatsapp(
+                            f"Vender lote disponible de {item['stock']} {especie} en {locacion}.",
+                            numero=WHATSAPP_NUMERO,
+                            audiencia="institucional",
+                            prioridad_estrategica=prioridad
+                        )
+                        video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {especie} en {locacion}.", prioridad_estrategica=prioridad)
 
-                        locacion = vivero_data.get("ubicacion") or "Sabana de Bogotá"
-                        datos = {"especie": nombre_especie, "cantidad": item["stock"], "ubicacion": locacion, "vendedor": nombre_vivero}
+                        registros = [
+                            {"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1 if seo_res else f"SEO — {especie}", "contenido": seo_res.contenido_md if seo_res else ""},
+                            {"tipo_contenido": "WHATSAPP", "titulo": f"WhatsApp — {especie} ({locacion})", "contenido": wa_res.mensaje_texto if wa_res else ""},
+                            {"tipo_contenido": "VIDEO", "titulo": f"Guion Video — {especie}", "contenido": video_res},
+                        ]
+                        guardados = guardar_en_historial(registros)
 
-                        # 2. Ejecutar Agentes
-                        seo_res = generar_seo_desde_inventario(datos, prioridad_estrategica=st.session_state.prioridad_estrategica)
-                        wa_res = generar_campana_whatsapp(f"Vender lote disponible de {item['stock']} {nombre_especie} en {locacion}.", audiencia="institucional", prioridad_estrategica=st.session_state.prioridad_estrategica)
-                        video_res = redactar_guion_viral(f"Carga logística y revisión de calidad de {nombre_especie} en {locacion}.", prioridad_estrategica=st.session_state.prioridad_estrategica)
+                        # El candado del lote se cierra solo si se guardó al menos el SEO,
+                        # para no "quemar" un lote cuando falló la generación.
+                        if seo_res and guardados:
+                            supabase_ag.table("campanas_ejecutadas").insert({"inventario_id": item["inventario_id"]}).execute()
+                        lotes_pendientes.clear()
+                        kpis_historial.clear()
 
-                        # 3. Guardado Histórico (AGENCIA)
-                        supabase_ag.table("historial_contenidos").insert([
-                            {"tipo_contenido": "SEO", "titulo": seo_res.titulo_h1, "contenido": seo_res.contenido_md, "estado": "borrador"},
-                            {"tipo_contenido": "WHATSAPP", "titulo": "Copy WhatsApp", "contenido": wa_res.mensaje_texto, "estado": "borrador"},
-                            {"tipo_contenido": "VIDEO", "titulo": "Guion Video", "contenido": video_res, "estado": "borrador"}
-                        ]).execute()
-
-                        # 4. Cierre de Candado Anti-Duplicidad (AGENCIA)
-                        supabase_ag.table("campanas_ejecutadas").insert({"inventario_id": item["inventario_id"]}).execute()
-
-                        st.session_state.c360_data = {"lote": datos, "seo": seo_res, "wa": wa_res, "video": video_res}
+                        st.session_state.c360_data = {
+                            "lote": datos,
+                            "vivero_interno": vivero_data.get("nombre_vivero", ""),
+                            "seo": seo_res, "wa": wa_res, "video": video_res,
+                            "guardados": guardados,
+                            "candado": bool(seo_res and guardados),
+                        }
                         st.session_state.c360_lista = True
+                        limpiar_widgets("c360_wa_copy", "c360_wa_script", "c360_lote")
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Error en la orquestación: {e}")
+                    except Exception as e:
+                        st.error(f"Error en la orquestación: {e}")
 
     # Renderizado persistente (sobrevive al rerun y a clics posteriores)
     if st.session_state.get("c360_lista"):
         data = st.session_state.c360_data
         lote = data["lote"]
-        st.success("Campaña generada y guardada en el historial de la Agencia.")
-        st.info(f"🎯 **Campaña Activa:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']} ({lote['vendedor']})")
+        st.success(f"Campaña generada · {data.get('guardados', 0)} pieza(s) guardadas en el Historial.")
+        if not data.get("candado"):
+            st.warning("El SEO no se generó o no se guardó: el lote NO quedó marcado como procesado, puedes reintentarlo.")
+        st.info(
+            f"🎯 **Campaña Activa:** {lote['cantidad']} {lote['especie']} | {lote['ubicacion']}"
+            + (f" · interno: {data['vivero_interno']} (no se publica)" if data.get("vivero_interno") else "")
+        )
 
         col1, col2 = st.columns(2)
         with col1:
             with st.expander("🚀 1. Artículo SEO B2B", expanded=True):
                 if data["seo"]:
-                    st.markdown(f"### {data['seo'].titulo_h1}")
-                    st.markdown(data["seo"].contenido_md)
+                    mostrar_articulo_seo(data["seo"], "c360_seo")
+                else:
+                    st.warning("El agente SEO no devolvió resultado.")
 
             with st.expander("🎬 3. Guion Visual (Veo 3)", expanded=True):
                 if data["video"]:
@@ -583,23 +900,13 @@ with tab_360:
 
         with col2:
             with st.expander("💬 2. Estrategia WhatsApp", expanded=True):
-                wa = data["wa"]
-                if wa:
-                    st.text_area("Copy Rápido:", value=wa.mensaje_texto, height=100, key="c360_wa_copy")
-                    script_360_actual = st.text_area("Guion de Audio:", value=wa.guion_nota_voz, height=150, key="c360_wa_script")
-                    if getattr(wa, "link_wa", None):
-                        st.markdown(f"[🔗 Enlace Directo WhatsApp]({wa.link_wa})")
-
-                    if st.button("🎧 Sintetizar Audio Campaña"):
-                        with st.spinner("Sintetizando..."):
-                            audio_campana = generar_audio_elevenlabs(script_360_actual)
-                            if audio_campana:
-                                st.audio(audio_campana, format="audio/mp3")
-                            else:
-                                st.warning("Fallo en la API de ElevenLabs.")
+                if data["wa"]:
+                    bloque_whatsapp(data["wa"], "c360_wa")
+                else:
+                    st.warning("El agente de WhatsApp no devolvió resultado.")
 
 # ==========================================
-# --- PESTAÑA NUEVA: BLOG GEO/AEO ---
+# --- PESTAÑA: BLOG GEO/AEO ---
 # ==========================================
 with tab_blog:
     st.subheader("📰 Blog Institucional (GEO/AEO)")
@@ -635,9 +942,13 @@ with tab_blog:
                         datos_verificables=datos_verificables_blog or None,
                         prioridad_estrategica=st.session_state.prioridad_estrategica
                     )
-                    st.session_state.articulo_blog_data = {"tema": tema_blog, "contenido": articulo_blog}
-                    st.session_state.articulo_blog_listo = True
-                    st.rerun()
+                    if es_error_agente(articulo_blog):
+                        st.error(articulo_blog or "El agente de blog no devolvió contenido.")
+                    else:
+                        st.session_state.articulo_blog_data = {"tema": tema_blog, "contenido": articulo_blog}
+                        st.session_state.articulo_blog_listo = True
+                        st.session_state.articulo_blog_guardado = False
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Error técnico: {e}")
 
@@ -647,20 +958,26 @@ with tab_blog:
         st.markdown(data["contenido"])
 
         st.markdown("---")
-        if st.button("💾 Guardar en Historial como borrador"):
-            if not supabase_ag:
-                st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
-            else:
-                supabase_ag.table("historial_contenidos").insert({
-                    "tipo_contenido": "BLOG",
-                    "titulo": data["tema"],
-                    "contenido": data["contenido"],
-                    "estado": "borrador"
-                }).execute()
-                st.success("Guardado en el Historial como borrador.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.session_state.get("articulo_blog_guardado"):
+                st.caption("✅ Ya está en el Historial.")
+            elif st.button("💾 Guardar en Historial como borrador"):
+                if guardar_en_historial({"tipo_contenido": "BLOG", "titulo": data["tema"], "contenido": data["contenido"]}):
+                    st.session_state.articulo_blog_guardado = True
+                    kpis_historial.clear()
+                    st.success("Guardado en el Historial como borrador.")
+        with c2:
+            st.download_button(
+                "⬇️ Descargar .md para WordPress",
+                data=data["contenido"],
+                file_name="articulo_blog.md",
+                mime="text/markdown",
+                key="blog_descargar_md",
+            )
 
 # ==========================================
-# --- PESTAÑA 6: HISTORIAL (lee de la AGENCIA) ---
+# --- PESTAÑA: HISTORIAL (lee de la AGENCIA) ---
 # ==========================================
 with tab_historial:
     st.subheader("📜 Historial de Contenido Generado")
@@ -676,26 +993,65 @@ with tab_historial:
     if not supabase_ag:
         st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
     else:
+        POR_PAGINA = 15
+        f1, f2, f3 = st.columns([1, 1, 2])
+        with f1:
+            filtro_tipo = st.selectbox("Tipo:", ["Todos", "SEO", "BLOG", "TEXTO", "WHATSAPP", "VIDEO"], key="hist_tipo")
+        with f2:
+            filtro_estado = st.selectbox("Estado:", ["Todos", "borrador", "aprobado"], key="hist_estado")
+        with f3:
+            filtro_texto = st.text_input("Buscar en el título:", key="hist_buscar")
+
         try:
-            res = supabase_ag.table("historial_contenidos").select("*").order("fecha_creacion", desc=True).execute()
+            q = supabase_ag.table("historial_contenidos").select("*", count="exact")
+            if filtro_tipo != "Todos":
+                q = q.eq("tipo_contenido", filtro_tipo)
+            if filtro_estado != "Todos":
+                q = q.eq("estado", filtro_estado)
+            if filtro_texto.strip():
+                q = q.ilike("titulo", f"%{filtro_texto.strip()}%")
+
+            # Cuenta total para paginar (antes se cargaba TODO el historial cada vez)
+            pagina = st.session_state.get("hist_pagina", 1)
+            desde = (pagina - 1) * POR_PAGINA
+            res = q.order("fecha_creacion", desc=True).range(desde, desde + POR_PAGINA - 1).execute()
+            total = res.count or 0
+            total_paginas = max(1, -(-total // POR_PAGINA))
+
             if not res.data:
-                st.info("Aún no hay contenido en el historial. Lanza una Campaña 360 para empezar.")
+                if total and pagina > 1:
+                    st.session_state.hist_pagina = 1
+                    st.rerun()
+                st.info("No hay contenido con estos filtros. Lanza una Campaña 360 o genera una pieza para empezar.")
             else:
+                cpag, cexp = st.columns([2, 1])
+                with cpag:
+                    st.caption(f"{total} pieza(s) · página {pagina} de {total_paginas}")
+                with cexp:
+                    buffer = io.StringIO()
+                    writer = csv.writer(buffer)
+                    writer.writerow(["id", "fecha_creacion", "tipo_contenido", "estado", "genero_venta", "titulo", "contenido"])
+                    for r in res.data:
+                        writer.writerow([r.get("id"), r.get("fecha_creacion"), r.get("tipo_contenido"), r.get("estado"), r.get("genero_venta"), r.get("titulo"), r.get("contenido")])
+                    st.download_button("⬇️ Exportar esta página (CSV)", data=buffer.getvalue().encode("utf-8-sig"), file_name="historial_contenidos.csv", mime="text/csv")
+
                 for item in res.data:
                     estado_item = item.get("estado", "borrador") or "borrador"
                     genero_venta_item = item.get("genero_venta")
                     icono_estado = "✅" if estado_item == "aprobado" else "📝"
-                    with st.expander(f"{icono_estado} {item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')} | estado: {estado_item}"):
+                    icono_venta = " · 💰 venta" if genero_venta_item is True else ""
+                    fecha = str(item.get("fecha_creacion", ""))[:10]
+                    with st.expander(f"{icono_estado} {fecha} | {item.get('tipo_contenido', 'N/A')} | {item.get('titulo', 'Sin título')}{icono_venta}"):
 
                         # --- Edición de título y contenido ---
                         titulo_editado = st.text_input(
                             "Título:",
-                            value=item.get("titulo", ""),
+                            value=item.get("titulo", "") or "",
                             key=f"titulo_{item['id']}"
                         )
                         contenido_editado = st.text_area(
                             "Contenido:",
-                            value=item.get("contenido", ""),
+                            value=item.get("contenido", "") or "",
                             height=250,
                             key=f"contenido_{item['id']}"
                         )
@@ -713,19 +1069,26 @@ with tab_historial:
                             if estado_item != "aprobado":
                                 if st.button("✅ Marcar como aprobado", key=f"aprobar_{item['id']}"):
                                     supabase_ag.table("historial_contenidos").update({"estado": "aprobado"}).eq("id", item["id"]).execute()
+                                    kpis_historial.clear()
                                     st.rerun()
                             else:
                                 st.caption("✅ Aprobado")
+                                if st.button("↩️ Volver a borrador", key=f"desaprobar_{item['id']}"):
+                                    supabase_ag.table("historial_contenidos").update({"estado": "borrador"}).eq("id", item["id"]).execute()
+                                    kpis_historial.clear()
+                                    st.rerun()
                         with col_b:
+                            indice_venta = 0 if genero_venta_item is None else (1 if genero_venta_item is True else 2)
                             nuevo_resultado = st.selectbox(
                                 "¿Generó una venta?",
                                 options=["Sin dato", "Sí", "No"],
-                                index={"Sin dato": 0, True: 1, False: 2}.get(genero_venta_item, 0) if genero_venta_item is not None else 0,
+                                index=indice_venta,
                                 key=f"venta_{item['id']}"
                             )
                             if st.button("Guardar resultado", key=f"guardar_venta_{item['id']}"):
                                 valor_venta = {"Sin dato": None, "Sí": True, "No": False}[nuevo_resultado]
                                 supabase_ag.table("historial_contenidos").update({"genero_venta": valor_venta}).eq("id", item["id"]).execute()
+                                kpis_historial.clear()
                                 st.rerun()
 
                         # --- Eliminar, con confirmación para no borrar por accidente ---
@@ -736,32 +1099,44 @@ with tab_historial:
                         )
                         if st.button("🗑️ Eliminar", key=f"eliminar_{item['id']}", disabled=not confirmar_borrado):
                             supabase_ag.table("historial_contenidos").delete().eq("id", item["id"]).execute()
+                            kpis_historial.clear()
                             st.success("Eliminado.")
+                            st.rerun()
+
+                if total_paginas > 1:
+                    p1, p2, p3 = st.columns([1, 2, 1])
+                    with p1:
+                        if st.button("⬅️ Anterior", disabled=pagina <= 1, key="hist_prev"):
+                            st.session_state.hist_pagina = pagina - 1
+                            st.rerun()
+                    with p3:
+                        if st.button("Siguiente ➡️", disabled=pagina >= total_paginas, key="hist_next"):
+                            st.session_state.hist_pagina = pagina + 1
                             st.rerun()
         except Exception as e:
             st.error(f"❌ Error técnico real: {e}")
 
 # ==========================================
-# --- PESTAÑA 7: COMPETENCIA ---
+# --- PESTAÑA: COMPETENCIA ---
 # ==========================================
 with tab_competencia:
     st.subheader("🧠 Estrategia Competitiva")
     st.caption(
         "Escribe aquí a mano quiénes son tus competidores reales y en qué "
         "eres mejor — a propósito, ningún agente lo genera automáticamente, "
-        "para no inventar competidores que no existen. Esto se guarda en "
-        "Supabase (antes se perdía al recargar la página)."
+        "para no inventar competidores que no existen. Se guarda en Supabase."
     )
-
-    if "estrategia_competitiva" not in st.session_state:
-        st.session_state.estrategia_competitiva = obtener_prioridad_estrategica(supabase_ag, clave=CLAVE_ESTRATEGIA_COMPETITIVA)
 
     nueva_estrategia_competitiva = st.text_area(
         "Estrategia competitiva:",
         value=st.session_state.estrategia_competitiva,
         height=200,
-        placeholder="Ej: Vivero X — fuerte en precio, débil en puntualidad logística. Nuestra ventaja: entrega garantizada en menos de 48h."
+        placeholder="Ej: Vivero X — fuerte en precio, débil en puntualidad logística. Nuestra ventaja: entrega garantizada en menos de 48h.",
+        key="txt_competencia"
     )
+    hay_cambios_competencia = nueva_estrategia_competitiva != st.session_state.estrategia_competitiva
+    if hay_cambios_competencia:
+        st.caption("✏️ Tienes cambios sin guardar — la propuesta y el pitch usan la versión guardada.")
     if st.button("💾 Guardar Estrategia Competitiva"):
         if not supabase_ag:
             st.error("Falta la conexión a la Agencia (SUPABASE_URL_AGENCIA / SUPABASE_KEY_AGENCIA).")
@@ -782,22 +1157,27 @@ with tab_competencia:
         "Puedes regenerar tantas veces como quieras antes de guardar."
     )
 
+    def _generar_propuesta():
+        with st.spinner("Razonando propuesta a partir de la competencia..."):
+            prioridad_prop, dolores_prop = proponer_estrategia_desde_competencia(
+                st.session_state.estrategia_competitiva,
+                prioridad_actual=st.session_state.prioridad_estrategica
+            )
+        if not prioridad_prop and not dolores_prop:
+            st.error("No se pudo generar la propuesta (revisa la conexión con Groq). La propuesta anterior se conserva.")
+            return
+        st.session_state.propuesta_prioridad = prioridad_prop
+        st.session_state.propuesta_dolores = dolores_prop
+        st.session_state.propuesta_generada = True
+        # Sin esto, "Volver a generar" seguía mostrando la propuesta vieja
+        limpiar_widgets("prioridad_editable_propuesta", "dolores_editable_propuesta")
+        st.rerun()
+
     if st.button("🧠 Generar Propuesta desde la Competencia"):
-        if not st.session_state.estrategia_competitiva.strip():
+        if not (st.session_state.estrategia_competitiva or "").strip():
             st.warning("Primero escribe y guarda tu estrategia competitiva arriba.")
         else:
-            with st.spinner("Razonando propuesta a partir de la competencia..."):
-                prioridad_prop, dolores_prop = proponer_estrategia_desde_competencia(
-                    st.session_state.estrategia_competitiva,
-                    prioridad_actual=st.session_state.prioridad_estrategica
-                )
-                if not prioridad_prop and not dolores_prop:
-                    st.error("No se pudo generar la propuesta (revisa la conexión con Groq).")
-                else:
-                    st.session_state.propuesta_prioridad = prioridad_prop
-                    st.session_state.propuesta_dolores = dolores_prop
-                    st.session_state.propuesta_generada = True
-                    st.rerun()
+            _generar_propuesta()
 
     if st.session_state.get("propuesta_generada"):
         st.markdown("**Propuesta de Prioridad** (editable antes de guardar):")
@@ -814,6 +1194,7 @@ with tab_competencia:
                 ok = guardar_prioridad_estrategica(supabase_ag, prioridad_editable)
                 if ok:
                     st.session_state.prioridad_estrategica = prioridad_editable
+                    limpiar_widgets("txt_prioridad")
                     st.success("Guardado como Prioridad Actual — ya la usan todos los agentes institucionales.")
                 else:
                     st.error("No se pudo guardar en Supabase.")
@@ -832,19 +1213,13 @@ with tab_competencia:
                 ok = guardar_prioridad_estrategica(supabase_ag, dolores_editable, clave=CLAVE_DOLORES_INTERMEDIARIOS)
                 if ok:
                     st.session_state.dolores_intermediarios = dolores_editable
+                    limpiar_widgets("txt_dolores")
                     st.success("Guardado como Dolores frente a Intermediarios — ya los usa el SEO proactivo.")
                 else:
                     st.error("No se pudo guardar en Supabase.")
 
         if st.button("🔄 Volver a generar (no me convence esta propuesta)"):
-            with st.spinner("Generando una nueva propuesta..."):
-                prioridad_prop, dolores_prop = proponer_estrategia_desde_competencia(
-                    st.session_state.estrategia_competitiva,
-                    prioridad_actual=st.session_state.prioridad_estrategica
-                )
-                st.session_state.propuesta_prioridad = prioridad_prop
-                st.session_state.propuesta_dolores = dolores_prop
-                st.rerun()
+            _generar_propuesta()
 
     st.markdown("---")
     test_comp = st.text_input("Generar pitch para:", placeholder="Ej: Palmas Botella por lote en Bogotá")
@@ -857,7 +1232,10 @@ with tab_competencia:
                         estrategia_competitiva=st.session_state.estrategia_competitiva,
                         prioridad_estrategica=st.session_state.prioridad_estrategica
                     )
-                    st.write(resultado_pitch)
+                    if es_error_agente(resultado_pitch):
+                        st.warning(resultado_pitch)
+                    else:
+                        st.write(resultado_pitch)
                 except Exception as e:
                     st.error(f"Error técnico: {e}")
         else:
