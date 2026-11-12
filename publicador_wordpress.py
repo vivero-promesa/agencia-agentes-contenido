@@ -189,8 +189,19 @@ def _explicar_error(resp) -> str:
         return ("El hosting (Dongee) respondió con su pantalla anti-bot en vez de WordPress. "
                 "Hay que pedirle a Dongee que permita /wp-json/ o el tráfico de Streamlit Cloud.")
     if resp.status_code == 401:
-        return ("WordPress rechazó el usuario o la contraseña de aplicación (401). "
-                "Revisa WP_USUARIO y WP_APP_PASSWORD en los Secrets.")
+        try:
+            codigo = resp.json().get("code", "")
+        except Exception:
+            codigo = ""
+        if codigo == "rest_not_logged_in" or codigo == "rest_cannot_create":
+            return ("WordPress no recibió el usuario y la clave (401, " + codigo + "): el hosting "
+                    "está quitando la cabecera de autorización. Hay que agregar una línea al "
+                    ".htaccess de WordPress para dejarla pasar.")
+        if codigo in ("invalid_username", "incorrect_password", "application_passwords_disabled"):
+            return ("WordPress rechazó el acceso (401, " + codigo + "). Revisa WP_USUARIO "
+                    "(usuario de inicio de sesión o correo) y WP_APP_PASSWORD en los Secrets.")
+        return ("WordPress rechazó el usuario o la contraseña de aplicación (401" +
+                (", " + codigo if codigo else "") + "). Revisa WP_USUARIO y WP_APP_PASSWORD en los Secrets.")
     if resp.status_code == 403:
         return "El usuario de WordPress no tiene permiso para publicar entradas (403)."
     try:
