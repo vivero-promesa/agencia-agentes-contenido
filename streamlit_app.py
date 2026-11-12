@@ -32,6 +32,7 @@ from agente_blog import redactar_articulo_blog
 from competencia import analizar_contra_competencia, proponer_estrategia_desde_competencia
 from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS, CLAVE_ESTRATEGIA_COMPETITIVA, cluster_ya_ejecutado, registrar_cluster_ejecutado
 import campanas as cmp
+from publicador_wordpress import ConfigWP, publicar_o_programar
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -1577,6 +1578,41 @@ def marcar_calendario(item: dict, estado: str):
         except Exception:
             pass
 
+# --- Publicación automática en el blog WordPress (se apaga sola si faltan los secrets) ---
+WP_CFG = ConfigWP(
+    usuario=secreto("WP_USUARIO"),
+    app_password=secreto("WP_APP_PASSWORD"),
+    url_api=secreto("WP_URL", "https://viveroonline.com.co"),
+    url_blog=secreto("WP_BLOG_URL", "https://www.viverohub.com/blog"),
+    hora=secreto("WP_HORA_PUBLICACION", "07:00"),
+)
+
+
+def programar_blog_en_wp(item: dict) -> dict:
+    """Crea la entrada en WordPress (programada o publicada) y guarda el enlace en el Historial.
+    Solo actúa en piezas BLOG sin enlace y con los secrets de WordPress puestos.
+    Deja el aviso en st.session_state["aviso_wp"] para mostrarlo tras recargar."""
+    if item.get("tipo_contenido") != "BLOG" or not WP_CFG.activo or item.get("url_publicada"):
+        return {}
+    dia_wp = st.session_state.get(f"fpub_{item['id']}")
+    if dia_wp is None and CAMPANAS_OK:
+        dia_wp = cmp._fecha(item.get("fecha_publicacion"))
+    with st.spinner("Programando el artículo en el blog..."):
+        res_wp = publicar_o_programar(WP_CFG, item.get("titulo") or "", item.get("contenido") or "", dia_wp)
+    st.session_state["aviso_wp"] = {"id": item["id"], "ok": res_wp.ok, "msg": res_wp.mensaje, "enlace": res_wp.enlace}
+    if not res_wp.ok:
+        return {}
+    campos = {"url_publicada": res_wp.enlace, "fecha_publicacion": res_wp.fecha.isoformat()}
+    try:
+        supabase_ag.table("historial_contenidos").update(campos).eq("id", item["id"]).execute()
+    except Exception as e:
+        st.session_state["aviso_wp"]["msg"] += f" Ojo: no se pudo guardar el enlace en el Historial ({e}); pégalo a mano."
+    marcar_calendario(item, "publicado")
+    # Que "Publicada el" y "Enlace donde se publicó" muestren lo nuevo tras recargar
+    st.session_state.pop(f"fpub_{item['id']}", None)
+    st.session_state.pop(f"upub_{item['id']}", None)
+    return campos
+
 with tab_historial:
     st.subheader("📜 Historial de Contenido Generado")
     st.caption(
@@ -1693,6 +1729,7 @@ with tab_historial:
                                 if st.button("✅ Marcar como aprobado", key=f"aprobar_{item['id']}"):
                                     supabase_ag.table("historial_contenidos").update({"estado": "aprobado"}).eq("id", item["id"]).execute()
                                     marcar_calendario(item, "aprobado")
+                                    programar_blog_en_wp(item)
                                     kpis_historial.clear()
                                     memoria_cache.clear()
                                     st.rerun()
@@ -1704,6 +1741,11 @@ with tab_historial:
                                     kpis_historial.clear()
                                     memoria_cache.clear()
                                     st.rerun()
+                                if item.get("tipo_contenido") == "BLOG" and WP_CFG.activo and not item.get("url_publicada"):
+                                    if st.button("📢 Programar en el blog", key=f"wp_{item['id']}"):
+                                        programar_blog_en_wp(item)
+                                        kpis_historial.clear()
+                                        st.rerun()
                         with col_b:
                             indice_venta = 0 if genero_venta_item is None else (1 if genero_venta_item is True else 2)
                             nuevo_resultado = st.selectbox(
@@ -1717,6 +1759,15 @@ with tab_historial:
                                 supabase_ag.table("historial_contenidos").update({"genero_venta": valor_venta}).eq("id", item["id"]).execute()
                                 kpis_historial.clear()
                                 st.rerun()
+
+                        # --- Aviso de la publicación automática en el blog (si la hubo) ---
+                        aviso_wp = st.session_state.get("aviso_wp")
+                        if aviso_wp and aviso_wp.get("id") == item["id"]:
+                            if aviso_wp["ok"]:
+                                st.success(f"📢 {aviso_wp['msg']} Enlace: {aviso_wp['enlace']}")
+                            else:
+                                st.error(f"📢 No se pudo programar en el blog: {aviso_wp['msg']}")
+                            st.session_state.pop("aviso_wp", None)
 
                         # --- Publicación: dónde y cuándo salió (cierra el ciclo de la campaña) ---
                         if CAMPANAS_OK:
