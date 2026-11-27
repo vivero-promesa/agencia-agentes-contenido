@@ -72,8 +72,30 @@ CANALES = {
 
 AUDIENCIAS = {
     "institucional": "Comprador institucional (paisajista, constructora, conjunto)",
-    "viverista": "Viverista (productor aliado)",
+    "viverista": "Viveristas productores aliados",
 }
+
+# Perfiles dentro de cada audiencia. Las claves de AUDIENCIAS ("institucional",
+# "viverista") NO cambian porque así quedan guardadas en la base Agencia;
+# solo se enriquece lo que leen los agentes.
+PERFILES_AUDIENCIA = {
+    "viverista": [
+        "Productor tradicional: tiene experiencia, trayectoria, plantas y conocimiento del negocio. "
+        "Busca oportunidades comerciales, pero no quiere asumir complejidad tecnológica.",
+        "Relevo generacional: está tomando las riendas del vivero familiar, tiene mayor familiaridad "
+        "con herramientas digitales y quiere ampliar los canales comerciales del negocio.",
+    ],
+}
+
+
+def describir_audiencia(audiencia: Optional[str]) -> str:
+    """Nombre de la audiencia + sus perfiles, tal como lo leen los agentes."""
+    nombre = AUDIENCIAS.get(audiencia or "", audiencia or "")
+    perfiles = PERFILES_AUDIENCIA.get(audiencia or "")
+    if not perfiles:
+        return nombre
+    lineas = "\n".join(f"  · {p}" for p in perfiles)
+    return f"{nombre}. Dos perfiles dentro de la misma audiencia (la pieza debe servirle a ambos o elegir uno explícitamente):\n{lineas}"
 
 ESTADOS_CAMPANA = ["borrador", "activa", "pausada", "cerrada"]
 ESTADOS_CALENDARIO = ["pendiente", "generado", "aprobado", "publicado"]
@@ -228,7 +250,7 @@ def construir_brief(
     if canal and canal in CANALES:
         partes.append(f"Rol del canal {canal}: {CANALES[canal]}")
     if audiencia and audiencia in AUDIENCIAS:
-        partes.append(f"Audiencia: {AUDIENCIAS[audiencia]}")
+        partes.append(f"Audiencia: {describir_audiencia(audiencia)}")
     if angulo:
         partes.append(f"Ángulo de esta pieza: {angulo}")
     if memoria:
@@ -280,7 +302,7 @@ CAMPAÑA
 - Mensaje clave: {campana.get('mensaje_clave')}
 - Insight: {campana.get('insight') or 'no definido'}
 - Objetivo: {campana.get('objetivo') or 'no definido'}
-- Audiencia principal: {AUDIENCIAS.get(campana.get('audiencia') or 'institucional', 'institucional')}
+- Audiencia principal: {describir_audiencia(campana.get('audiencia') or 'institucional')}
 
 PILARES (usa solo estas claves):
 {pilares_txt}
