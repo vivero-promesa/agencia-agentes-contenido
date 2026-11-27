@@ -761,7 +761,7 @@ with tab_campanas:
                 st.write("")
                 if st.button("🧠 Proponer calendario con IA", key=f"cal_proponer_{camp_id}"):
                     with st.spinner("Planeando semanas, canales y pilares con continuidad..."):
-                        filas_ia = cmp.generar_calendario(
+                        filas_ia, motivo_cal = cmp.generar_calendario_detallado(
                             invocar_modelo_seguro, actual, int(semanas_c), int(por_sem_c), memoria_cache(supabase_ag, camp_id),
                             marca=MARCA_UI, desde=cmp.inicio_siguiente_calendario(calendario_c),
                         )
@@ -770,7 +770,7 @@ with tab_campanas:
                         limpiar_widgets(f"cal_editor_{camp_id}")
                         st.rerun()
                     else:
-                        st.error("La IA no devolvió un calendario válido (o todas las fechas caen después del fin de la campaña). Intenta de nuevo o amplía la fecha de fin.")
+                        st.error(f"No se pudo proponer el calendario. {motivo_cal}")
 
             propuesta = st.session_state.get(f"cal_prop_{camp_id}")
             if propuesta:

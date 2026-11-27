@@ -368,19 +368,72 @@ def normalizar_filas(filas: list, campana: dict, semanas: int, desde: Optional[d
     return salida
 
 
+def _leer_json_calendario(texto) -> Optional[list]:
+    """Lee la respuesta de la IA aunque venga envuelta en ```json, con texto
+    alrededor o con otra clave ('calendario', 'piezas'...). None si no se
+    puede leer."""
+    if not texto:
+        return None
+    t = str(texto).strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        t = t[t.find("\n") + 1:] if "\n" in t else t
+    candidatos = [t]
+    for a, b in (("{", "}"), ("[", "]")):
+        i, j = t.find(a), t.rfind(b)
+        if i != -1 and j > i:
+            candidatos.append(t[i:j + 1])
+    for c in candidatos:
+        try:
+            datos = json.loads(c)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(datos, list):
+            return datos
+        if isinstance(datos, dict):
+            for clave in ("filas", "calendario", "piezas", "items"):
+                if isinstance(datos.get(clave), list):
+                    return datos[clave]
+            listas = [v for v in datos.values() if isinstance(v, list)]
+            if listas:
+                return listas[0]
+    return None
+
+
+def generar_calendario_detallado(invocar, campana: dict, semanas: int = 4, piezas_semana: int = 3, memoria: str = "",
+                                 marca: str = "viveroonline.com.co", desde: Optional[date] = None) -> tuple:
+    """Como generar_calendario, pero devuelve (filas, motivo). 'motivo' es
+    vacío si todo salió bien, o explica en lenguaje simple qué falló, para
+    no esconder el error detrás de un mensaje genérico. Reintenta una vez
+    si la IA no responde o responde algo ilegible."""
+    prompt = prompt_calendario(campana, semanas, piezas_semana, memoria, marca)
+    filas, motivo = None, ""
+    for intento in range(2):
+        texto = invocar(prompt, CalendarioIA)
+        if not texto:
+            motivo = "La IA (Gemini) no respondió: puede ser saturación o cuota agotada. Espera un minuto e intenta de nuevo."
+            print(f"[calendario] intento {intento + 1}: respuesta vacía de la IA")
+            continue
+        filas = _leer_json_calendario(texto)
+        if filas:
+            break
+        motivo = "La IA respondió, pero en un formato que no se pudo leer. Intenta de nuevo."
+        print(f"[calendario] intento {intento + 1}: JSON ilegible ({len(str(texto))} caracteres): {str(texto)[:300]!r}")
+    if not filas:
+        return [], motivo
+    salida = normalizar_filas(filas, campana, semanas, desde)
+    if not salida:
+        inicio = max(_fecha(campana.get("fecha_inicio")) or date.today(), desde or date.min)
+        return [], (f"La IA propuso {len(filas)} piezas, pero todas caen después del fin de la campaña "
+                    f"({campana.get('fecha_fin')}). El calendario arrancaría el {inicio.isoformat()}: amplía la fecha de fin.")
+    return salida, ""
+
+
 def generar_calendario(invocar, campana: dict, semanas: int = 4, piezas_semana: int = 3, memoria: str = "",
                        marca: str = "viveroonline.com.co", desde: Optional[date] = None) -> list:
     """'invocar' = función (prompt, schema) -> texto JSON (se inyecta
     invocar_modelo_seguro de agentes_crecimiento, Gemini con salida JSON)."""
-    texto = invocar(prompt_calendario(campana, semanas, piezas_semana, memoria, marca), CalendarioIA)
-    if not texto:
-        return []
-    try:
-        datos = json.loads(texto)
-    except (TypeError, json.JSONDecodeError):
-        return []
-    filas = datos.get("filas", []) if isinstance(datos, dict) else datos
-    return normalizar_filas(filas or [], campana, semanas, desde)
+    return generar_calendario_detallado(invocar, campana, semanas, piezas_semana, memoria, marca, desde)[0]
 
 
 def filas_desde_editor(filas: list, campana_id: int) -> list:
