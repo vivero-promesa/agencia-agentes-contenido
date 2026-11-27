@@ -4,6 +4,8 @@ Bienvenido al "Centro de Comando" de ViveroOnline. Este repositorio contiene el 
 
 El objetivo de esta herramienta no es vender plantas como un vivero tradicional, sino posicionar a ViveroOnline como **la infraestructura digital de abastecimiento ornamental B2B líder en Colombia**, aplicando una Estrategia de Océano Azul — sin perder la cercanía con el viverista tradicional, que sigue siendo el corazón del negocio.
 
+> 📡 **Centro de Campañas (en planeación):** el plan para enlazar el Centro de Comando con Google Ads, Facebook, Instagram, TikTok, LinkedIn y WhatsApp está en [`docs/CENTRO_CAMPANAS.md`](docs/CENTRO_CAMPANAS.md). Antes de tocar código de campañas, leer [`docs/REGLAS_DE_ORO.md`](docs/REGLAS_DE_ORO.md): **el presupuesto lo maneja Elena a mano; ningún agente lo toca.**
+
 ## 🧠 Cerebro Editable
 
 Todos los agentes de contenido consultan tres módulos centrales en vez de tener su propio criterio embebido:
