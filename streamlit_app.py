@@ -950,7 +950,7 @@ with tab_estrategia:
     audiencia_campana_estrategia = st.radio(
         "Audiencia del WhatsApp:",
         options=["institucional", "viverista"],
-        format_func=lambda x: "Comprador institucional" if x == "institucional" else "Viverista",
+        format_func=lambda x: "Comprador institucional" if x == "institucional" else "Viveristas productores aliados",
         horizontal=True,
         key="audiencia_campana_estrategia"
     )
@@ -1106,7 +1106,7 @@ with tab_whatsapp:
         audiencia_wa = st.radio(
             "¿A quién le escribes?",
             options=["institucional", "viverista"],
-            format_func=lambda x: "Comprador institucional (paisajista/constructora)" if x == "institucional" else "Viverista (productor)",
+            format_func=lambda x: "Comprador institucional (paisajista/constructora)" if x == "institucional" else "Viveristas productores aliados",
             horizontal=True
         )
         obj_wa = st.text_input("Objetivo del mensaje:", placeholder="Ej: Vender 500 Eugenias a paisajistas")
