@@ -50,6 +50,15 @@ Artículos de blog largos optimizados para que ChatGPT, Perplexity y Gemini los 
 ### 9. 📜 Historial
 Todo el contenido generado, con **Estado** (`borrador`/`aprobado` — nada se considera listo hasta revisión humana) y **¿Generó una venta?** (Sí/No/Sin dato — primer mecanismo manual para conectar contenido con resultado real).
 
+### 📢 Publicar y reprogramar (nov 2026)
+- **Botón "📢 Publicar"** en cada pieza aprobada (Historial y Calendario), según su destino:
+  - BLOG → WordPress (programado para la fecha de "Publicada el").
+  - VIDEO y TEXTO → el mismo contenido a Instagram, Facebook y TikTok. Instagram y Facebook salen directo por la API de Meta si están los secrets `META_PAGE_ID`, `META_PAGE_TOKEN` y `META_IG_USER_ID`; si no, el texto queda listo para copiar y un botón abre Meta Business Suite. TikTok siempre abre TikTok Studio con el texto listo (su API exige auditoría).
+  - WHATSAPP → abre WhatsApp con el mensaje; Elena lo envía a sus listas y lo marca como enviado.
+  - SEO → va en la ficha del producto del marketplace (manual).
+  - Dónde salió queda en `url_publicada` como `red: enlace | red: enlace` (sin migración). Código: `publicador_redes.py`.
+- **"📆 Cambiar las fechas de lo que falta"** en el calendario de cada campaña: reparte lo no publicado desde la fecha elegida, con el ritmo semanal, sin domingos ni festivos de Colombia, y puede extender el fin de la campaña.
+
 ## 🛠️ Stack Tecnológico
 
 * **Frontend / Orquestador:** Streamlit (Python)

@@ -3,7 +3,8 @@
 Estas reglas aplican a todo el código de este repo, a cualquier agente de IA (incluido GitHub Copilot) y a cualquier código traído de otra herramienta. Si un cambio rompe alguna, no se une a `main`.
 
 1. **El presupuesto es 100 % manual.** Ningún bot ni agente crea, activa, pausa ni edita campañas, presupuestos, pujas ni métodos de pago en Google Ads, Meta, TikTok o LinkedIn. Eso lo hace solo Elena.
-2. **Accesos de solo lectura.** Google Ads: usuario de nivel "Solo lectura". Meta: solo el permiso `ads_read`, nunca `ads_management`. Si alguien escribe código que intente modificar algo, la plataforma lo rechaza.
+2. **Accesos de solo lectura en anuncios.** Google Ads: usuario de nivel "Solo lectura". Meta: solo el permiso `ads_read`, nunca `ads_management`. Si alguien escribe código que intente modificar algo, la plataforma lo rechaza.
+   - *Publicaciones orgánicas (no son anuncios ni gastan dinero):* el token de la página de viverohub puede tener `pages_manage_posts` e `instagram_content_publish`, y solo se usa desde el botón "📢 Publicar" de una pieza **aprobada**, con el clic de Elena. Nunca por un proceso programado.
 3. **Sin funciones de escritura hacia las plataformas de anuncios.** No existe ningún botón "Publicar anuncio" ni "Subir presupuesto". Los agentes entregan borradores y CSV; Elena los revisa y los sube.
 4. **WhatsApp masivo cuenta como gasto.** Cada plantilla de marketing cuesta. El envío lo dispara solo el clic de Elena, por lotes, solo a contactos registrados que aceptaron recibir mensajes, y nunca por un proceso programado.
 5. **Un solo código por campaña.** Toda pieza, anuncio y enlace lleva el código VH-00X en `utm_campaign`. Una pieza sin código no sale del Historial.
