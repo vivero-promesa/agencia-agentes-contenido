@@ -417,6 +417,107 @@ def inicio_siguiente_calendario(calendario: list, hoy: Optional[date] = None) ->
     return max([hoy] + [f + timedelta(days=1) for f in fechas])
 
 
+# ==========================================
+# 4b. REPROGRAMAR LO QUE FALTA (cuando cambian las fechas)
+# ==========================================
+# Festivos de Colombia (Ley Emiliani ya aplicada) + días que conviene evitar.
+# Si el calendario pasa de 2027, se agregan aquí los del año siguiente.
+FESTIVOS_CO = {
+    "2026-12-08", "2026-12-25",
+    "2027-01-01", "2027-01-11", "2027-03-22", "2027-03-25", "2027-03-26",
+    "2027-05-01", "2027-05-10", "2027-05-31", "2027-06-07", "2027-07-05",
+    "2027-07-20", "2027-08-07", "2027-08-16", "2027-10-18", "2027-11-01",
+    "2027-11-15", "2027-12-08", "2027-12-25",
+}
+DIAS_EVITAR = {"12-24", "12-31"}  # Nochebuena y fin de año: nadie lee contenido B2B
+
+# Días de la semana que se usan según el ritmo (0 = lunes). Nunca domingo.
+DIAS_POR_RITMO = {
+    1: [1],                 # martes
+    2: [1, 3],              # martes y jueves
+    3: [1, 3, 5],           # martes, jueves y sábado
+    4: [0, 1, 3, 5],
+    5: [0, 1, 2, 3, 4],
+    6: [0, 1, 2, 3, 4, 5],
+}
+
+
+def dia_habil_contenido(d: date) -> bool:
+    iso = d.isoformat()
+    return d.weekday() != 6 and iso not in FESTIVOS_CO and iso[5:] not in DIAS_EVITAR
+
+
+def fechas_disponibles(desde: date, cantidad: int, piezas_semana: int = 3) -> list:
+    """Devuelve 'cantidad' fechas desde 'desde' con el ritmo semanal pedido.
+    Si un día del ritmo cae en festivo, la pieza pasa al siguiente día hábil
+    libre (sin pisar otra pieza ni saltarse de semana)."""
+    dias = DIAS_POR_RITMO.get(max(1, min(int(piezas_semana or 3), 6)), DIAS_POR_RITMO[3])
+    lunes = desde - timedelta(days=desde.weekday())
+    salida, usadas, semana = [], set(), 0
+    while len(salida) < cantidad and semana < 60:
+        for idx in dias:
+            d = lunes + timedelta(weeks=semana, days=idx)
+            if d < desde:
+                continue
+            original = d
+            while (not dia_habil_contenido(d) or d in usadas) and d.weekday() != 6:
+                d += timedelta(days=1)
+            if d.weekday() == 6 or d in usadas:
+                # Sin hueco hacia adelante en la semana (p. ej. 24 y 25 de dic.):
+                # se busca hacia atrás, sin pasar del lunes ni de 'desde'.
+                d = original - timedelta(days=1)
+                while d >= max(desde, lunes + timedelta(weeks=semana)) and (not dia_habil_contenido(d) or d in usadas):
+                    d -= timedelta(days=1)
+                if d < max(desde, lunes + timedelta(weeks=semana)) or d in usadas:
+                    continue
+            usadas.add(d)
+            salida.append(d)
+            if len(salida) == cantidad:
+                break
+        semana += 1
+    return sorted(salida)
+
+
+def plan_reprogramacion(calendario: list, desde: date, piezas_semana: int = 3) -> list:
+    """Reparte en fechas nuevas todo lo que aún NO se publicó, en el mismo
+    orden en que estaba planeado (la continuidad de la campaña se respeta).
+    No escribe nada: devuelve la vista previa para que Elena la confirme."""
+    faltan = [c for c in calendario or [] if c.get("estado") != "publicado"]
+    faltan.sort(key=lambda c: (str(c.get("fecha") or ""), int(c.get("id") or 0)))
+    nuevas = fechas_disponibles(desde, len(faltan), piezas_semana)
+    plan = []
+    for fila, nueva in zip(faltan, nuevas):
+        plan.append({
+            "id": fila.get("id"),
+            "historial_id": fila.get("historial_id"),
+            "antes": str(fila.get("fecha") or "")[:10],
+            "nueva": nueva.isoformat(),
+            "canal": fila.get("canal"),
+            "estado": fila.get("estado"),
+            "tema": fila.get("tema"),
+        })
+    return plan
+
+
+def aplicar_reprogramacion(sb, plan: list) -> int:
+    """Guarda las fechas nuevas del calendario. Si la pieza ya está en el
+    Historial, su 'Publicada el' también pasa a la fecha nueva (así el blog
+    se programa en WordPress para ese día al aprobarlo)."""
+    n = 0
+    for p in plan:
+        if p["antes"] == p["nueva"]:
+            continue
+        actualizar_fila_calendario(sb, p["id"], {"fecha": p["nueva"]})
+        if p.get("historial_id"):
+            try:
+                sb.table("historial_contenidos").update({"fecha_publicacion": p["nueva"]}) \
+                    .eq("id", p["historial_id"]).is_("url_publicada", "null").execute()
+            except Exception:
+                pass
+        n += 1
+    return n
+
+
 def _normalizar_texto(t: str) -> list:
     import unicodedata
     t = unicodedata.normalize("NFKD", str(t or "").lower())

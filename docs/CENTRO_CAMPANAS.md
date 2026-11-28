@@ -20,6 +20,8 @@ El módulo hace tres cosas:
 
 **Publicar, activar campañas, enviar WhatsApp masivos y manejar presupuesto lo hace siempre Elena, a mano.**
 
+> **Actualización 27 nov 2026:** las publicaciones **orgánicas** ya tienen un botón "📢 Publicar" por pieza aprobada (blog → WordPress; video y texto → Instagram, Facebook y TikTok; WhatsApp → abre el mensaje). Sigue siendo el clic de Elena, nunca automático, y no toca anuncios ni presupuesto. Ver `publicador_redes.py`.
+
 Orden: cuentas ordenadas → medición en viverohub.com → enlaces rastreables → generador de anuncios y WhatsApp → datos de vuelta → cierre con ventas reales.
 
 ---

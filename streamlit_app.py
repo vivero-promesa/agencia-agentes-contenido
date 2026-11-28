@@ -3,7 +3,7 @@ import os
 import csv
 import io
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import quote
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -33,6 +33,7 @@ from competencia import analizar_contra_competencia, proponer_estrategia_desde_c
 from estrategia import obtener_prioridad_estrategica, guardar_prioridad_estrategica, CLAVE_DOLORES_INTERMEDIARIOS, CLAVE_ESTRATEGIA_COMPETITIVA, cluster_ya_ejecutado, registrar_cluster_ejecutado
 import campanas as cmp
 from publicador_wordpress import ConfigWP, publicar_o_programar
+import publicador_redes as pr
 
 # ==========================================
 # 0. CONFIGURACIÓN DEL CENTRO DE COMANDO
@@ -622,6 +623,241 @@ def pestana_desde_calendario(canal: str, prefijo: str) -> bool:
                 st.markdown(res["registro"]["contenido"])
     return True
 
+# ==========================================
+# --- PUBLICACIÓN (blog, redes y mensajes) — se usa en Campañas y en Historial ---
+# ==========================================
+def marcar_calendario(item: dict, estado: str):
+    """Mantiene el calendario al día cuando la pieza se aprueba o se publica."""
+    if CAMPANAS_OK and item.get("calendario_id"):
+        try:
+            cmp.actualizar_fila_calendario(supabase_ag, item["calendario_id"], {"estado": estado})
+            calendario_cache.clear()
+        except Exception:
+            pass
+
+# --- Publicación automática en el blog WordPress (se apaga sola si faltan los secrets) ---
+WP_CFG = ConfigWP(
+    usuario=secreto("WP_USUARIO"),
+    app_password=secreto("WP_APP_PASSWORD"),
+    url_api=secreto("WP_URL", "https://viveroonline.com.co"),
+    url_blog=secreto("WP_BLOG_URL", "https://www.viverohub.com/blog"),
+    hora=secreto("WP_HORA_PUBLICACION", "07:00"),
+)
+
+
+def programar_blog_en_wp(item: dict) -> dict:
+    """Crea la entrada en WordPress (programada o publicada) y guarda el enlace en el Historial.
+    Solo actúa en piezas BLOG sin enlace y con los secrets de WordPress puestos.
+    Deja el aviso en st.session_state["aviso_wp"] para mostrarlo tras recargar."""
+    if item.get("tipo_contenido") != "BLOG" or not WP_CFG.activo or item.get("url_publicada"):
+        return {}
+    dia_wp = st.session_state.get(f"fpub_{item['id']}")
+    if dia_wp is None and CAMPANAS_OK:
+        dia_wp = cmp._fecha(item.get("fecha_publicacion"))
+    with st.spinner("Programando el artículo en el blog..."):
+        res_wp = publicar_o_programar(WP_CFG, item.get("titulo") or "", item.get("contenido") or "", dia_wp)
+    st.session_state["aviso_wp"] = {"id": item["id"], "ok": res_wp.ok, "msg": res_wp.mensaje, "enlace": res_wp.enlace}
+    if not res_wp.ok:
+        return {}
+    campos = {"url_publicada": res_wp.enlace, "fecha_publicacion": res_wp.fecha.isoformat()}
+    try:
+        supabase_ag.table("historial_contenidos").update(campos).eq("id", item["id"]).execute()
+    except Exception as e:
+        st.session_state["aviso_wp"]["msg"] += f" Ojo: no se pudo guardar el enlace en el Historial ({e}); pégalo a mano."
+    marcar_calendario(item, "publicado")
+    # Que "Publicada el" y "Enlace donde se publicó" muestren lo nuevo tras recargar
+    st.session_state.pop(f"fpub_{item['id']}", None)
+    st.session_state.pop(f"upub_{item['id']}", None)
+    return campos
+
+# --- Publicación en redes (Instagram + Facebook por Meta; TikTok y mensajes con kit) ---
+META_CFG = pr.ConfigMeta(
+    page_id=secreto("META_PAGE_ID"),
+    page_token=secreto("META_PAGE_TOKEN"),
+    ig_user_id=secreto("META_IG_USER_ID"),
+    version=secreto("META_API_VERSION", "v21.0"),
+)
+SITIO_DESTINO = secreto("SITIO_DESTINO", "https://www.viverohub.com")
+HASHTAGS_REDES = secreto("HASHTAGS_REDES", "#viverohub #viveros #plantasornamentales #SabanaDeBogota #paisajismo")
+
+
+def guardar_en_redes(item: dict, nuevos: dict):
+    """Anota dónde salió la pieza (red: enlace) y la marca publicada en el calendario."""
+    url = pr.unir_enlaces(item.get("url_publicada"), nuevos)
+    supabase_ag.table("historial_contenidos").update({
+        "url_publicada": url,
+        "fecha_publicacion": date.today().isoformat(),
+    }).eq("id", item["id"]).execute()
+    marcar_calendario(item, "publicado")
+    kpis_historial.clear()
+    memoria_cache.clear()
+
+
+def texto_inicial_redes(item: dict, campana, tipo: str) -> str:
+    """Texto que se propone para las tres redes (Elena lo edita antes de publicar).
+    Un guion de video no sirve como pie de foto: para VIDEO se arma uno corto."""
+    if tipo == "VIDEO":
+        tema = (item.get("titulo") or "").replace("Guion Video —", "").strip()
+        mensaje = (campana or {}).get("mensaje_clave") or ""
+        base = f"{tema}\n\n{mensaje}".strip()
+    else:
+        base = item.get("contenido") or ""
+    texto = pr.texto_para_redes(base, enlace=None, red="instagram")
+    return f"{texto}\n\n{HASHTAGS_REDES}".strip()
+
+
+def bloque_publicar(item: dict, prefijo: str, campana: dict = None):
+    """El botón '📢 Publicar' de una pieza: la manda a su destino según el tipo."""
+    tipo = (item.get("tipo_contenido") or item.get("canal") or "").upper()
+    destino = pr.destino_de(tipo)
+    iid = item["id"]
+    st.markdown(f"**📢 Publicar** → {destino['etiqueta']}")
+
+    # Avisos de lo que pasó en el último clic (se muestran tras recargar)
+    aviso_wp = st.session_state.get("aviso_wp")
+    if aviso_wp and aviso_wp.get("id") == iid:
+        (st.success if aviso_wp["ok"] else st.error)(
+            f"📰 {aviso_wp['msg']}" + (f" Enlace: {aviso_wp['enlace']}" if aviso_wp.get("enlace") else ""))
+    for res in st.session_state.get(f"aviso_redes_{iid}", []) or []:
+        (st.success if res["ok"] else st.error)(f"{pr.REDES.get(res['red'], res['red'])}: {res['mensaje']}" + (f" {res['enlace']}" if res.get("enlace") else ""))
+
+    if (item.get("estado") or "borrador") != "aprobado":
+        st.caption("Primero revísala y márcala como ✅ aprobada en 📜 Historial; ahí se habilita publicar.")
+        return
+
+    codigo = cmp.codigo_campana(campana) if campana else ""
+
+    if tipo == "BLOG":
+        if item.get("url_publicada"):
+            st.caption(f"Ya está en el blog: {item['url_publicada']}")
+        elif WP_CFG.activo:
+            if st.button("📰 Programar en el blog", key=f"{prefijo}_wp_{iid}",
+                         help="Queda programado para la fecha de 'Publicada el' (o sale hoy si la fecha ya pasó)."):
+                programar_blog_en_wp(item)
+                kpis_historial.clear()
+                st.rerun()
+        else:
+            st.caption("La publicación en el blog está apagada (faltan WP_USUARIO / WP_APP_PASSWORD en los Secrets).")
+        return
+
+    if tipo == "SEO":
+        st.caption("Este texto va en la ficha del producto en viverohub.com. Cuando lo pegues allá, guarda el enlace en 📜 Historial → 'Enlace donde se publicó'.")
+        return
+
+    if tipo == "WHATSAPP":
+        st.caption("Se envía solo a contactos registrados que aceptaron recibir mensajes, por lotes pequeños y con tu clic (regla de oro 4).")
+        texto_wa = item.get("contenido") or ""
+        if codigo and codigo not in texto_wa:
+            texto_wa = f"{texto_wa}\n\n(Ref. {codigo})"
+        w1, w2 = st.columns(2)
+        with w1:
+            st.link_button("💬 Abrir WhatsApp con el mensaje", f"https://wa.me/?text={quote(texto_wa)}", width="stretch")
+        with w2:
+            if "whatsapp" in pr.redes_publicadas(item.get("url_publicada")):
+                st.caption("✅ Ya marcado como enviado.")
+            elif st.button("✅ Ya lo envié", key=f"{prefijo}_waok_{iid}", width="stretch"):
+                guardar_en_redes(item, {"whatsapp": f"enviado {date.today().isoformat()}"})
+                st.rerun()
+        return
+
+    if tipo not in ("VIDEO", "TEXTO"):
+        st.caption("Este tipo de pieza no tiene un destino de publicación definido.")
+        return
+
+    # ---------- VIDEO / TEXTO → Instagram, Facebook y TikTok (mismo contenido) ----------
+    ya = pr.redes_publicadas(item.get("url_publicada"))
+    if ya & {"instagram", "facebook", "tiktok"}:
+        st.caption("Ya salió en: " + ", ".join(pr.REDES[r] for r in ("instagram", "facebook", "tiktok") if r in ya)
+                   + f" · {item.get('url_publicada')}")
+
+    texto = st.text_area(
+        "Texto de la publicación (el mismo para las tres redes):",
+        value=texto_inicial_redes(item, campana, tipo), height=180, key=f"{prefijo}_txt_{iid}",
+    )
+    medios = st.text_area(
+        "Fotos o video — enlace público, uno por línea:",
+        height=80, key=f"{prefijo}_med_{iid}",
+        placeholder="Video: enlace de Google Drive (acceso 'cualquier persona con el enlace') o .mp4\n"
+                    "Carrusel: 2 a 10 enlaces de imágenes, uno por línea",
+        help="Instagram y TikTok no publican texto solo: necesitan la foto o el video. "
+             "El video lo sigues haciendo en Google Vids; lo exportas, lo subes a Drive y pegas aquí el enlace.",
+    )
+    imagenes, video = pr.separar_medios(medios)
+    if tipo == "VIDEO" and not video and imagenes:
+        # Un enlace de Drive no dice si es video: en una pieza VIDEO el primero se toma como video
+        video, imagenes = imagenes[0], imagenes[1:]
+    enlace_fb = pr.enlace_con_utm(SITIO_DESTINO, "facebook", codigo, iid)
+
+    elegidas = []
+    c_ig, c_fb, c_tt = st.columns(3)
+    for col, red in ((c_ig, "instagram"), (c_fb, "facebook"), (c_tt, "tiktok")):
+        with col:
+            if st.checkbox(pr.REDES[red], value=red not in ya, key=f"{prefijo}_chk_{red}_{iid}"):
+                elegidas.append(red)
+
+    meta_directo = [r for r in elegidas if (r == "instagram" and META_CFG.activo_instagram) or (r == "facebook" and META_CFG.activo_facebook)]
+    meta_kit = [r for r in elegidas if r in ("instagram", "facebook") and r not in meta_directo]
+
+    if meta_directo:
+        nombres = " y ".join(pr.REDES[r] for r in meta_directo)
+        falta_medio = "instagram" in meta_directo and not (imagenes or video)
+        if falta_medio:
+            st.caption("Para Instagram pega primero el enlace de la foto o el video.")
+        if st.button(f"📢 Publicar ahora en {nombres}", type="primary", key=f"{prefijo}_pub_{iid}", disabled=falta_medio):
+            resultados, nuevos = [], {}
+            with st.spinner(f"Publicando en {nombres}... (un video puede tardar hasta un minuto y medio)"):
+                if "instagram" in meta_directo:
+                    r_ig = pr.publicar_instagram(META_CFG, pr.texto_para_redes(texto, red="instagram"), imagenes, video)
+                    resultados.append(r_ig)
+                if "facebook" in meta_directo:
+                    r_fb = pr.publicar_facebook(META_CFG, pr.texto_para_redes(texto, enlace_fb, "facebook"), imagenes, video, enlace_fb)
+                    resultados.append(r_fb)
+            for r_ in resultados:
+                if r_.ok:
+                    nuevos[r_.red] = r_.enlace or "publicado"
+            if nuevos:
+                try:
+                    guardar_en_redes(item, nuevos)
+                except Exception as e:
+                    resultados.append(pr.ResultadoRed("historial", False, f"Se publicó, pero no se pudo anotar en el Historial ({e})."))
+            st.session_state[f"aviso_redes_{iid}"] = [r_.__dict__ for r_ in resultados]
+            st.rerun()
+
+    # Kit: texto listo para copiar + botón que abre la pantalla de publicar de la red
+    if meta_kit or "tiktok" in elegidas:
+        st.caption("Copia el texto (botón 📋 arriba a la derecha del recuadro), abre la red, sube la foto o el video y pega.")
+        st.code(pr.texto_para_redes(texto, red="instagram"), language=None)
+        k1, k2 = st.columns(2)
+        if meta_kit:
+            with k1:
+                st.link_button("📱 Abrir Meta Business Suite (Instagram + Facebook)", pr.URL_ABRIR["meta"], width="stretch")
+        if "tiktok" in elegidas:
+            with k2:
+                st.link_button("🎵 Abrir TikTok Studio (cuenta viverohub)", pr.URL_ABRIR["tiktok"], width="stretch")
+        manuales = meta_kit + (["tiktok"] if "tiktok" in elegidas else [])
+        m1, m2, m3 = st.columns([1, 2, 1])
+        with m1:
+            red_m = st.selectbox("¿Dónde lo publicaste?", manuales, format_func=lambda r: pr.REDES[r], key=f"{prefijo}_redm_{iid}")
+        with m2:
+            enlace_m = st.text_input("Enlace de la publicación (opcional):", key=f"{prefijo}_urlm_{iid}")
+        with m3:
+            st.write("")
+            if st.button("✅ Ya lo publiqué", key=f"{prefijo}_okm_{iid}"):
+                guardar_en_redes(item, {red_m: enlace_m.strip() or "publicado"})
+                st.rerun()
+
+
+def historial_por_ids(ids: list) -> dict:
+    """Trae de una sola consulta las piezas del Historial ligadas al calendario."""
+    ids = [str(i) for i in ids if i]
+    if not ids or not supabase_ag:
+        return {}
+    try:
+        filas = supabase_ag.table("historial_contenidos").select("*").in_("id", ids).execute().data or []
+    except Exception:
+        return {}
+    return {str(f["id"]): f for f in filas}
+
 with tab_campanas:
     st.subheader("📣 Campañas: la idea que une todas las piezas")
     st.caption(
@@ -825,17 +1061,64 @@ with tab_campanas:
                         st.session_state.pop(f"cal_prop_{camp_id}", None)
                         st.rerun()
 
+            # ---------- Reprogramar lo que falta (cuando cambian las fechas) ----------
+            faltan_c = [f for f in calendario_c if f.get("estado") != "publicado"]
+            if faltan_c:
+                with st.expander(f"📆 Cambiar las fechas de lo que falta ({len(faltan_c)} pieza(s) sin publicar)", expanded=bool(r["plan_atrasadas"])):
+                    hoy_rep = date.today()
+                    primero_mes = (hoy_rep.replace(day=1) + timedelta(days=32)).replace(day=1)
+                    rp1, rp2 = st.columns(2)
+                    with rp1:
+                        desde_rep = st.date_input(
+                            "Arrancar desde:", value=primero_mes if hoy_rep.day >= 20 else hoy_rep + timedelta(days=1),
+                            min_value=hoy_rep, key=f"rep_desde_{camp_id}",
+                        )
+                    with rp2:
+                        ritmo_rep = st.number_input("Piezas por semana:", min_value=1, max_value=6, value=int(por_sem_c), key=f"rep_ritmo_{camp_id}")
+                    plan_rep = cmp.plan_reprogramacion(calendario_c, desde_rep, int(ritmo_rep))
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "Antes": p_["antes"], "Nueva fecha": p_["nueva"], "Canal": p_["canal"],
+                            "Sale en": pr.destino_de(p_["canal"])["etiqueta"], "Estado": p_["estado"], "Tema": p_["tema"],
+                        } for p_ in plan_rep]),
+                        width="stretch", hide_index=True,
+                    )
+                    st.caption(
+                        "Mismo orden de la campaña, sin domingos, festivos de Colombia, 24 ni 31 de diciembre. "
+                        "Las piezas ya generadas también cambian su 'Publicada el' (así el blog se programa para la fecha nueva). "
+                        "Lo ya publicado no se mueve."
+                    )
+                    fin_rep = cmp._fecha(actual.get("fecha_fin"))
+                    ultima_rep = plan_rep[-1]["nueva"] if plan_rep else None
+                    extender_rep = False
+                    if fin_rep and ultima_rep and ultima_rep > fin_rep.isoformat():
+                        st.warning(f"La campaña termina el {fin_rep.isoformat()} y la última pieza quedaría el {ultima_rep}.")
+                        extender_rep = st.checkbox(f"Extender el fin de la campaña hasta el {ultima_rep}", value=True, key=f"rep_ext_{camp_id}")
+                    if st.button("✅ Aplicar las fechas nuevas", type="primary", key=f"rep_aplicar_{camp_id}"):
+                        try:
+                            n_rep = cmp.aplicar_reprogramacion(supabase_ag, plan_rep)
+                            if extender_rep:
+                                supabase_ag.table("campanas").update({"fecha_fin": ultima_rep}).eq("id", camp_id).execute()
+                            refrescar_campanas()
+                            st.session_state[f"rep_ok_{camp_id}"] = f"📆 {n_rep} pieza(s) con fecha nueva, desde el {desde_rep.isoformat()}."
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"No se pudieron cambiar las fechas: {e}")
+            if st.session_state.get(f"rep_ok_{camp_id}"):
+                st.success(st.session_state.pop(f"rep_ok_{camp_id}"))
+
             if not calendario_c:
                 st.info("Esta campaña todavía no tiene calendario. Pídele una propuesta a la IA o arma la tuya.")
             else:
                 iconos_estado = {"pendiente": "⏳", "generado": "📝", "aprobado": "✅", "publicado": "📢"}
                 hoy_iso = date.today().isoformat()
+                piezas_cal = historial_por_ids([f.get("historial_id") for f in calendario_c])
                 for fila in calendario_c:
                     fid = fila["id"]
                     atrasada = fila.get("estado") == "pendiente" and str(fila.get("fecha", "")) < hoy_iso
                     p_nombre = cmp.PILARES.get(fila.get("pilar"), {}).get("nombre", fila.get("pilar"))
                     titulo_fila = (
-                        f"{iconos_estado.get(fila.get('estado'), '•')} {fila.get('fecha')} · {fila.get('canal')} · "
+                        f"{iconos_estado.get(fila.get('estado'), '•')} {fila.get('fecha')} · {fila.get('canal')} → {pr.destino_de(fila.get('canal'))['etiqueta']} · "
                         f"{p_nombre} · {fila.get('audiencia')} — {fila.get('tema')}" + (" ⏰" if atrasada else "")
                     )
                     with st.expander(titulo_fila):
@@ -857,6 +1140,9 @@ with tab_campanas:
                                 st.rerun()
                         else:
                             st.caption(f"Estado: {fila.get('estado')} · revísala, edítala y apruébala en 📜 Historial (filtra por esta campaña).")
+                            pieza_cal = piezas_cal.get(str(fila.get("historial_id") or ""))
+                            if pieza_cal:
+                                bloque_publicar(pieza_cal, f"cal{fid}", actual)
                         res_fila = st.session_state.get(f"cal_res_{fid}")
                         if res_fila:
                             if res_fila.get("nota"):
@@ -1569,50 +1855,6 @@ with tab_blog:
 # ==========================================
 # --- PESTAÑA: HISTORIAL (lee de la AGENCIA) ---
 # ==========================================
-def marcar_calendario(item: dict, estado: str):
-    """Mantiene el calendario al día cuando la pieza se aprueba o se publica."""
-    if CAMPANAS_OK and item.get("calendario_id"):
-        try:
-            cmp.actualizar_fila_calendario(supabase_ag, item["calendario_id"], {"estado": estado})
-            calendario_cache.clear()
-        except Exception:
-            pass
-
-# --- Publicación automática en el blog WordPress (se apaga sola si faltan los secrets) ---
-WP_CFG = ConfigWP(
-    usuario=secreto("WP_USUARIO"),
-    app_password=secreto("WP_APP_PASSWORD"),
-    url_api=secreto("WP_URL", "https://viveroonline.com.co"),
-    url_blog=secreto("WP_BLOG_URL", "https://www.viverohub.com/blog"),
-    hora=secreto("WP_HORA_PUBLICACION", "07:00"),
-)
-
-
-def programar_blog_en_wp(item: dict) -> dict:
-    """Crea la entrada en WordPress (programada o publicada) y guarda el enlace en el Historial.
-    Solo actúa en piezas BLOG sin enlace y con los secrets de WordPress puestos.
-    Deja el aviso en st.session_state["aviso_wp"] para mostrarlo tras recargar."""
-    if item.get("tipo_contenido") != "BLOG" or not WP_CFG.activo or item.get("url_publicada"):
-        return {}
-    dia_wp = st.session_state.get(f"fpub_{item['id']}")
-    if dia_wp is None and CAMPANAS_OK:
-        dia_wp = cmp._fecha(item.get("fecha_publicacion"))
-    with st.spinner("Programando el artículo en el blog..."):
-        res_wp = publicar_o_programar(WP_CFG, item.get("titulo") or "", item.get("contenido") or "", dia_wp)
-    st.session_state["aviso_wp"] = {"id": item["id"], "ok": res_wp.ok, "msg": res_wp.mensaje, "enlace": res_wp.enlace}
-    if not res_wp.ok:
-        return {}
-    campos = {"url_publicada": res_wp.enlace, "fecha_publicacion": res_wp.fecha.isoformat()}
-    try:
-        supabase_ag.table("historial_contenidos").update(campos).eq("id", item["id"]).execute()
-    except Exception as e:
-        st.session_state["aviso_wp"]["msg"] += f" Ojo: no se pudo guardar el enlace en el Historial ({e}); pégalo a mano."
-    marcar_calendario(item, "publicado")
-    # Que "Publicada el" y "Enlace donde se publicó" muestren lo nuevo tras recargar
-    st.session_state.pop(f"fpub_{item['id']}", None)
-    st.session_state.pop(f"upub_{item['id']}", None)
-    return campos
-
 with tab_historial:
     st.subheader("📜 Historial de Contenido Generado")
     st.caption(
@@ -1741,11 +1983,6 @@ with tab_historial:
                                     kpis_historial.clear()
                                     memoria_cache.clear()
                                     st.rerun()
-                                if item.get("tipo_contenido") == "BLOG" and WP_CFG.activo and not item.get("url_publicada"):
-                                    if st.button("📢 Programar en el blog", key=f"wp_{item['id']}"):
-                                        programar_blog_en_wp(item)
-                                        kpis_historial.clear()
-                                        st.rerun()
                         with col_b:
                             indice_venta = 0 if genero_venta_item is None else (1 if genero_venta_item is True else 2)
                             nuevo_resultado = st.selectbox(
@@ -1760,14 +1997,9 @@ with tab_historial:
                                 kpis_historial.clear()
                                 st.rerun()
 
-                        # --- Aviso de la publicación automática en el blog (si la hubo) ---
-                        aviso_wp = st.session_state.get("aviso_wp")
-                        if aviso_wp and aviso_wp.get("id") == item["id"]:
-                            if aviso_wp["ok"]:
-                                st.success(f"📢 {aviso_wp['msg']} Enlace: {aviso_wp['enlace']}")
-                            else:
-                                st.error(f"📢 No se pudo programar en el blog: {aviso_wp['msg']}")
-                            st.session_state.pop("aviso_wp", None)
+                        # --- 📢 Publicar: blog, redes (Instagram, Facebook, TikTok) o mensajes ---
+                        st.markdown("---")
+                        bloque_publicar(item, "hist", camp_item)
 
                         # --- Publicación: dónde y cuándo salió (cierra el ciclo de la campaña) ---
                         if CAMPANAS_OK:
@@ -1940,3 +2172,10 @@ with tab_competencia:
                     st.error(f"Error técnico: {e}")
         else:
             st.warning("Ingresa un tema o producto para generar el pitch.")
+
+# ==========================================
+# Los avisos de publicación se muestran una sola vez (en Campañas y en
+# Historial) y se borran al terminar de dibujar la página.
+# ==========================================
+for _k in [k for k in st.session_state.keys() if str(k).startswith("aviso_redes_") or k == "aviso_wp"]:
+    st.session_state.pop(_k, None)
